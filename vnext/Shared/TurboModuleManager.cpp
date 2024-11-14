@@ -4,6 +4,10 @@
 #include "TurboModuleManager.h"
 #include "ReactCommon/SampleTurboCxxModule.h"
 
+#ifdef USE_FABRIC
+#include <react/nativemodule/defaults/DefaultTurboModules.h>
+#endif
+
 namespace facebook {
 namespace react {
 
@@ -29,6 +33,13 @@ std::shared_ptr<TurboModule> TurboModuleManager::getModule(const std::string &mo
       return module;
     }
   }
+
+#ifdef USE_FABRIC
+  if (auto module = facebook::react::DefaultTurboModules::getTurboModule(moduleName, m_callInvoker)) {
+    m_modules.emplace(moduleName, module);
+    return module;
+  }
+#endif
 
   return nullptr;
 }

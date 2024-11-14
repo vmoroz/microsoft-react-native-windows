@@ -226,6 +226,16 @@ Value JsiAbiRuntime::evaluatePreparedJavaScript(const std::shared_ptr<const Prep
   throw;
 }
 
+void JsiAbiRuntime::queueMicrotask(const facebook::jsi::Function& callback) try
+{
+  return m_runtime.QueueMicrotask(AsJsiObjectRef(callback));
+}
+catch (hresult_error const&)
+{
+  RethrowJsiError();
+  throw;
+}
+
 bool JsiAbiRuntime::drainMicrotasks(int maxMicrotasksHint) try {
   return m_runtime.DrainMicrotasks(maxMicrotasksHint);
 } catch (hresult_error const &) {

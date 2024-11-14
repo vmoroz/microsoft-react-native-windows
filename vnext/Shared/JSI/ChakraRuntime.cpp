@@ -273,6 +273,12 @@ facebook::jsi::Value ChakraRuntime::evaluatePreparedJavaScript(
   }
 }
 
+void ChakraRuntime::queueMicrotask(const facebook::jsi::Function& callback)
+{
+  assert(false);
+  // Not implemented
+}
+
 bool ChakraRuntime::drainMicrotasks(int /*maxMicrotasksHint*/) {
   // Not implemented
   return true;
