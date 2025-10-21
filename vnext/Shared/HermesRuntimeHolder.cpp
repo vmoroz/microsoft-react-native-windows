@@ -15,7 +15,9 @@
 #include <jsinspector-modern/tracing/InstanceTracingProfile.h>
 #include <react/featureflags/ReactNativeFeatureFlags.h>
 #include <mutex>
+#include <cstdio>
 #include "SafeLoadLibrary.h"
+#include "Hermes/HermesRuntimeTargetDelegate.h"
 
 #define CRASH_ON_ERROR(result) VerifyElseCrash(result == napi_ok);
 
@@ -364,6 +366,22 @@ std::shared_ptr<facebook::jsi::Runtime> HermesRuntimeHolder::getRuntime() noexce
   return m_jsiRuntime;
 }
 
+const std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> &
+HermesRuntimeHolder::getSharedRuntimeTargetDelegate() {
+  if (!m_targetDelegate) {
+    hermes_api_vtable vtable = facebook::hermes::getHermesApiVTable();
+    
+    if (vtable != nullptr) {
+      OutputDebugStringA("HermesRuntimeHolder: Creating CDP target delegate\n");
+      auto shared_this = shared_from_this();
+      m_targetDelegate = std::shared_ptr<Microsoft::ReactNative::HermesRuntimeTargetDelegate>(
+          new Microsoft::ReactNative::HermesRuntimeTargetDelegate(shared_this));
+    }
+  }
+  
+  return m_targetDelegate;
+}
+
 void HermesRuntimeHolder::crashHandler(int fileDescriptor) noexcept {
   CRASH_ON_ERROR(getHermesApi().hermes_dump_crash_data(m_runtime, fileDescriptor));
 }
@@ -403,6 +421,11 @@ void HermesRuntimeHolder::removeFromProfiling() const noexcept {
   CRASH_ON_ERROR(getHermesApi().hermes_sampling_profiler_dump_to_file(fileName.c_str()));
 }
 
+hermes_runtime HermesRuntimeHolder::getHermesRuntime() noexcept {
+  // TODO: (@vmoroz) Implement
+  return nullptr;
+}
+
 //==============================================================================
 // HermesJSRuntime implementation
 //==============================================================================
@@ -414,46 +437,53 @@ facebook::jsi::Runtime &HermesJSRuntime::getRuntime() noexcept {
   return *m_holder->getRuntime();
 }
 
-void HermesJSRuntime::addConsoleMessage(
-    facebook::jsi::Runtime &runtime,
-    facebook::react::jsinspector_modern::ConsoleMessage message) {
-  return;
+facebook::react::jsinspector_modern::RuntimeTargetDelegate &HermesJSRuntime::getRuntimeTargetDelegate() {
+  auto delegate = m_holder->getSharedRuntimeTargetDelegate();
+  return *delegate;
 }
 
-bool HermesJSRuntime::supportsConsole() const {
-  return false;
-}
-
-std::unique_ptr<facebook::react::jsinspector_modern::StackTrace> HermesJSRuntime::captureStackTrace(
-    facebook::jsi::Runtime &runtime,
-    size_t framesToSkip) {
-  return std::make_unique<facebook::react::jsinspector_modern::StackTrace>();
-}
-
-void HermesJSRuntime::enableSamplingProfiler() {
-  return; // [Windows TODO: stubbed implementation #14700]
-}
-
-void HermesJSRuntime::disableSamplingProfiler() {
-  return; // [Windows TODO: stubbed implementation #14700]
-}
-
-facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile HermesJSRuntime::collectSamplingProfile() {
-  return facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile(
-      "stubbed_impl",
-      std::vector<facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile::Sample>{},
-      nullptr); // [Windows TODO: stubbed implementation #14700]
-}
-
-std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate> HermesJSRuntime::createAgentDelegate(
-    facebook::react::jsinspector_modern::FrontendChannel frontendChannel,
-    facebook::react::jsinspector_modern::SessionState &sessionState,
-    std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate::ExportedState> previouslyExportedState,
-    const facebook::react::jsinspector_modern::ExecutionContextDescription &executionContextDescription,
-    facebook::react::RuntimeExecutor runtimeExecutor) {
-  (void)frontendChannel;
-  (void)sessionState;
-  return nullptr;
-}
+//void HermesJSRuntime::addConsoleMessage(
+//    facebook::jsi::Runtime &runtime,
+//    facebook::react::jsinspector_modern::ConsoleMessage message) {
+//  return;
+//}
+//
+//bool HermesJSRuntime::supportsConsole() const {
+//  return false;
+//}
+//
+//std::unique_ptr<facebook::react::jsinspector_modern::StackTrace> HermesJSRuntime::captureStackTrace(
+//    facebook::jsi::Runtime &runtime,
+//    size_t framesToSkip) {
+//  return std::make_unique<facebook::react::jsinspector_modern::StackTrace>();
+//}
+//
+//void HermesJSRuntime::enableSamplingProfiler() {
+//  return; // [Windows TODO: stubbed implementation #14700]
+//}
+//
+//void HermesJSRuntime::disableSamplingProfiler() {
+//  return; // [Windows TODO: stubbed implementation #14700]
+//}
+//
+//facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile HermesJSRuntime::collectSamplingProfile() {
+//  return facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile(
+//      "stubbed_impl", {}); // [Windows TODO: stubbed implementation #14700]
+//}
+//
+//std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate> HermesJSRuntime::createAgentDelegate(
+//    facebook::react::jsinspector_modern::FrontendChannel frontendChannel,
+//    facebook::react::jsinspector_modern::SessionState &sessionState,
+//    std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate::ExportedState> previouslyExportedState,
+//    const facebook::react::jsinspector_modern::ExecutionContextDescription &executionContextDescription,
+//    facebook::react::RuntimeExecutor runtimeExecutor) {
+//  auto& targetDelegate = getRuntimeTargetDelegate();
+//  return targetDelegate.createAgentDelegate(
+//      frontendChannel, 
+//      sessionState, 
+//      std::move(previouslyExportedState), 
+//      executionContextDescription, 
+//      runtimeExecutor);
+//}
 
 } // namespace Microsoft::ReactNative
