@@ -153,7 +153,10 @@ class HermesDebuggerApi {
   friend HermesCdpAgentDeleter;
   friend HermesCdpStateDeleter;
   friend HermesStackTraceDeleter;
-  static hermes_debugger_vtable *vtable;
+
+  friend void setHermesDebuggerVTable(const hermes_debugger_vtable *vtable);
+
+  static const hermes_debugger_vtable *vtable;
 };
 
 inline void HermesCdpDebuggerDeleter::operator()(hermes_cdp_debugger cdp_debugger) {

@@ -29,7 +29,11 @@ using namespace Microsoft::NodeApiJsi;
 
 namespace Microsoft::ReactNative {
 
-/*static*/ hermes_debugger_vtable *HermesDebuggerApi::vtable = nullptr;
+/*static*/ const hermes_debugger_vtable *HermesDebuggerApi::vtable = nullptr;
+
+void setHermesDebuggerVTable(const hermes_debugger_vtable *vtable) {
+  HermesDebuggerApi::vtable = vtable;
+}
 
 React::ReactPropertyId<React::ReactNonAbiValue<std::shared_ptr<HermesRuntimeHolder>>>
 HermesRuntimeHolderProperty() noexcept {
@@ -60,6 +64,9 @@ HermesApi &initHermesApi() noexcept {
   static HermesApi s_hermesApi(&funcResolver);
   HermesApi::setCurrent(&s_hermesApi);
   CRASH_ON_ERROR(s_hermesApi.hermes_set_inspector(&addInspectorPage, &removeInspectorPage));
+  const hermes_debugger_vtable *debuggerVTable{};
+  s_hermesApi.hermes_get_debugger_vtable(&debuggerVTable);
+  setHermesDebuggerVTable(debuggerVTable);
   return s_hermesApi;
 }
 
