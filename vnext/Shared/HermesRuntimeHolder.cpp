@@ -321,9 +321,9 @@ HermesRuntimeHolder::HermesRuntimeHolder(
       m_preparedScriptStore(std::move(preparedScriptStore)) {}
 
 HermesRuntimeHolder::~HermesRuntimeHolder() {
-  if (m_runtime) {
-    CRASH_ON_ERROR(getHermesApi().jsr_delete_runtime(m_runtime));
-  }
+  //if (m_runtime) {
+  //  CRASH_ON_ERROR(getHermesApi().jsr_delete_runtime(m_runtime));
+  //}
 }
 
 void HermesRuntimeHolder::initRuntime() noexcept {
@@ -352,6 +352,7 @@ void HermesRuntimeHolder::initRuntime() noexcept {
   jsr_runtime runtime{};
   CRASH_ON_ERROR(api.jsr_create_runtime(config, &runtime));
   CRASH_ON_ERROR(api.jsr_delete_config(config));
+  m_runtime = runtime;
 
   napi_env env{};
   CRASH_ON_ERROR(api.jsr_runtime_get_node_api_env(runtime, &env));
