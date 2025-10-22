@@ -75,7 +75,7 @@ class HermesRuntimeAgentDelegate : public facebook::react::jsinspector_modern::R
   std::unique_ptr<RuntimeAgentDelegate::ExportedState> getExportedState() override;
 
  private:
-  facebook::hermes::HermesUniqueCdpAgent hermesCdpAgent_;
+  HermesUniqueCdpAgent hermesCdpAgent_;
 };
 
 } // namespace Microsoft::ReactNative

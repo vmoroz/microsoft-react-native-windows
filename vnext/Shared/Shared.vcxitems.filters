@@ -76,9 +76,6 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)JSI\JSExecutorFactorySettings.cpp">
       <Filter>Source Files\JSI</Filter>
     </ClCompile>
-    <ClCompile Include="$(MSBuildThisFileDirectory)InspectorPackagerConnection.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)Modules\HttpModule.cpp">
       <Filter>Source Files\Modules</Filter>
     </ClCompile>
@@ -247,9 +244,6 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)HermesRuntimeHolder.cpp">
       <Filter>Hermes</Filter>
     </ClCompile>
-    <ClCompile Include="$(MSBuildThisFileDirectory)HermesSamplingProfiler.cpp">
-      <Filter>Hermes</Filter>
-    </ClCompile>
     <ClCompile Include="$(NodeApiJsiDir)src\ApiLoaders\HermesApi.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)JSI\V8RuntimeHolder.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)SafeLoadLibrary.cpp" />
@@ -328,6 +322,11 @@
     <ClCompile Include="$(ReactNativeDir)\ReactCommon\jsinspector-modern\network\NetworkReporter.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)..\Microsoft.ReactNative\Fabric\Composition\TextInput\WindowsTextInputState.cpp" />
     <ClCompile Include="$(ReactNativeDir)\ReactCommon\runtimeexecutor\platform\cxx\ReactCommon\RuntimeExecutorSyncUIThreadUtils.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Hermes\HermesRuntimeAgentDelegate.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Hermes\HermesRuntimeTargetDelegate.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Hermes\HermesSamplingProfiler.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Inspector\ReactInspectorPackagerConnectionDelegate.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)LegacyInspectorPackagerConnection.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
@@ -597,9 +596,6 @@
       <Filter>Header Files\JSI</Filter>
     </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)..\include\Shared\cdebug.h" />
-    <ClInclude Include="$(MSBuildThisFileDirectory)InspectorPackagerConnection.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)tracing\tracing.h">
       <Filter>Header Files\tracing</Filter>
     </ClInclude>
@@ -790,9 +786,6 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)HermesRuntimeHolder.h">
       <Filter>Hermes</Filter>
     </ClInclude>
-    <ClInclude Include="$(MSBuildThisFileDirectory)HermesSamplingProfiler.h">
-      <Filter>Hermes</Filter>
-    </ClInclude>
     <ClInclude Include="$(NodeApiJsiDir)src\ApiLoaders\HermesApi.h" />
     <ClInclude Include="$(NodeApiJsiDir)src\ApiLoaders\HermesApi.inc" />
     <ClInclude Include="$(MSBuildThisFileDirectory)..\Microsoft.ReactNative\JsiApi.h" />
@@ -801,6 +794,12 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)V8JSIRuntimeHolder.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)..\Microsoft.ReactNative\Fabric\Composition\Modal\WindowsModalHostViewSate.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)..\Microsoft.ReactNative\Fabric\Composition\CompositionViewComponentView.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Hermes\HermesRuntimeAgentDelegate.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Hermes\HermesRuntimeTargetDelegate.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Hermes\HermesSamplingProfiler.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Inspector\ReactInspectorPackagerConnectionDelegate.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Inspector\ReactInspectorThread.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)LegacyInspectorPackagerConnection.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)tracing\rnw.wprp">

@@ -19,7 +19,6 @@
 #include "HermesRuntimeAgentDelegate.h"
 
 using namespace facebook::react::jsinspector_modern;
-using namespace facebook::hermes;
 
 namespace Microsoft::ReactNative {
 
@@ -36,7 +35,7 @@ class HermesStackTraceWrapper : public StackTrace {
     return hermesStackTrace_;
   }
 
-  HermesUniqueStackTrace* operator->() {
+  HermesUniqueStackTrace *operator->() {
     return &hermesStackTrace_;
   }
 
@@ -48,7 +47,7 @@ class HermesStackTraceWrapper : public StackTrace {
 
 HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder> hermesRuntimeHolder)
     : hermesRuntimeHolder_(std::move(hermesRuntimeHolder)),
-      hermesCdpDebugger_(HermesApi2().createCdpDebugger(hermesRuntimeHolder_->getHermesRuntime())) {}
+      hermesCdpDebugger_(HermesDebuggerApi::createCdpDebugger(hermesRuntimeHolder_->getHermesRuntime())) {}
 
 HermesRuntimeTargetDelegate::~HermesRuntimeTargetDelegate() = default;
 
@@ -132,13 +131,13 @@ void HermesRuntimeTargetDelegate::addConsoleMessage(facebook::jsi::Runtime & /*r
     hermesStackTrace = std::move(**hermesStackTraceWrapper);
   }
 
-  //TODO: (vmoroz) Implement
-  //HermesApi2().addConsoleMessage(
-  //    hermesCdpDebugger_.get(),
-  //    message.timestamp,
-  //    type,
-  //    std::move(message.args),
-  //    hermesStackTrace.release());
+  // TODO: (vmoroz) Implement
+  // HermesApi2().addConsoleMessage(
+  //     hermesCdpDebugger_.get(),
+  //     message.timestamp,
+  //     type,
+  //     std::move(message.args),
+  //     hermesStackTrace.release());
 }
 
 bool HermesRuntimeTargetDelegate::supportsConsole() const {
@@ -149,23 +148,24 @@ std::unique_ptr<StackTrace> HermesRuntimeTargetDelegate::captureStackTrace(
     facebook::jsi::Runtime & /*runtime*/,
     size_t /*framesToSkip*/) {
   return std::make_unique<HermesStackTraceWrapper>(
-      HermesApi2().captureStackTrace(hermesRuntimeHolder_->getHermesRuntime()));
+      HermesDebuggerApi::captureStackTrace(hermesRuntimeHolder_->getHermesRuntime()));
 }
 
 void HermesRuntimeTargetDelegate::enableSamplingProfiler() {
-  // TODO: (vmoroz) Implement
+  // TODO: (vmoroz) implement
   // HermesApi2().enableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime(), HERMES_SAMPLING_FREQUENCY_HZ);
 }
 
 void HermesRuntimeTargetDelegate::disableSamplingProfiler() {
-  // TODO: (vmoroz) Implement
+  // TODO: (vmoroz) implement
   // HermesApi2().disableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime());
 }
 
-facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile HermesRuntimeTargetDelegate::collectSamplingProfile() {
-  // TODO: (vmoroz) impplement
+facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile
+HermesRuntimeTargetDelegate::collectSamplingProfile() {
+  // TODO: (vmoroz) implement
   return facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile(
-      "stubbed_impl", {}); // [Windows TODO: stubbed implementation #14700]
+      "stubbed_impl", {}, {}); // [Windows TODO: stubbed implementation #14700]
 }
 
 } // namespace Microsoft::ReactNative

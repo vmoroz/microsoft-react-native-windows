@@ -71,7 +71,7 @@ class HermesRuntimeTargetDelegate : public facebook::react::jsinspector_modern::
 
  private:
   std::shared_ptr<HermesRuntimeHolder> hermesRuntimeHolder_;
-  const facebook::hermes::HermesUniqueCdpDebugger hermesCdpDebugger_;
+  const HermesUniqueCdpDebugger hermesCdpDebugger_;
 };
 
 } // namespace Microsoft::ReactNative

@@ -10,43 +10,16 @@
 #include <hermes/hermes_api.h>
 #include <react/runtime/JSRuntimeFactory.h>
 
-namespace facebook::hermes {
-
-// Direct DLL loading implementation that bypasses broken delay loading
-inline hermes_api_vtable getHermesApiVTable() {
-  static hermes_api_vtable vtable = nullptr;
-  static bool initialization_attempted = false;
-  
-  if (!vtable && !initialization_attempted) {
-    initialization_attempted = true;
-    // TODO: dont call .dll twice
-    HMODULE hermesModule = LoadLibraryW(L"hermes.dll");
-    // check where are we calling from
-    typedef napi_status (*hermes_get_cdp_vtable_func)(hermes_api_vtable *);
-    hermes_get_cdp_vtable_func getCdpVtable = 
-        (hermes_get_cdp_vtable_func)GetProcAddress(hermesModule, "hermes_get_cdp_vtable");
-    
-    if (getCdpVtable) { 
-      napi_status status = getCdpVtable(&vtable);
-      if (status == napi_ok && vtable) {
-        OutputDebugStringA("[RNW] getHermesApiVTable() - CDP vtable loaded successfully!\n");
-      } else {
-        OutputDebugStringA("[RNW] getHermesApiVTable() - Failed to get CDP vtable\n");
-        vtable = nullptr;
-      }
-    }
-  }
-  
-  return vtable;
-}
+namespace Microsoft::ReactNative {
 
 template <typename TLambda, typename TFunctor>
-struct FunctorAdapter {
+class FunctorAdapter {
   static_assert(sizeof(TLambda) == -1, "Unsupported signature");
 };
 
 template <typename TLambda, typename TResult, typename... TArgs>
-struct FunctorAdapter<TLambda, TResult(void *, TArgs...)> {
+class FunctorAdapter<TLambda, TResult(void *, TArgs...)> {
+ public:
   static TResult Invoke(void *data, TArgs... args) {
     return reinterpret_cast<TLambda *>(data)->operator()(args...);
   }
@@ -64,12 +37,13 @@ inline TFunctor AsFunctor(TLambda &&lambda) {
 }
 
 template <typename TFunctor, typename TInvoke>
-struct FunctorWrapperBase {
+class FunctorWrapperBase {
   static_assert(sizeof(TInvoke) == -1, "Unsupported signature");
 };
 
 template <typename TFunctor, typename TResult, typename... TArgs>
-struct FunctorWrapperBase<TFunctor, TResult (*)(void *, TArgs...)> {
+class FunctorWrapperBase<TFunctor, TResult (*)(void *, TArgs...)> {
+ public:
   FunctorWrapperBase(TFunctor functor) : functor_(functor) {}
 
   ~FunctorWrapperBase() {
@@ -87,72 +61,29 @@ struct FunctorWrapperBase<TFunctor, TResult (*)(void *, TArgs...)> {
 };
 
 template <typename TFunctor>
-struct FunctorWrapper : FunctorWrapperBase<TFunctor, decltype(std::declval<TFunctor>().invoke)> {
+class FunctorWrapper : public FunctorWrapperBase<TFunctor, decltype(std::declval<TFunctor>().invoke)> {
+ public:
   using FunctorWrapperBase<TFunctor, decltype(std::declval<TFunctor>().invoke)>::FunctorWrapperBase;
 };
 
-struct HermesCdpDebuggerDeleter {
-  void operator()(hermes_cdp_debugger cdp_debugger) {
-    // Skip deletion for stub/dummy values to prevent crashes
-    if (cdp_debugger == nullptr || 
-        cdp_debugger == (hermes_cdp_debugger)0x1 || 
-        cdp_debugger == (hermes_cdp_debugger)0x2) {
-      return;
-    }
-    
-    auto vtable = getHermesApiVTable();
-    if (vtable) {
-      vtable->release_cdp_debugger(cdp_debugger);
-    }
-  }
+class HermesCdpDebuggerDeleter {
+ public:
+  void operator()(hermes_cdp_debugger cdp_debugger);
 };
 
-struct HermesCdpAgentDeleter {
-  void operator()(hermes_cdp_agent cdp_agent) {
-    // Skip deletion for stub/dummy values to prevent crashes
-    if (cdp_agent == nullptr || 
-        cdp_agent == (hermes_cdp_agent)0x1 || 
-        cdp_agent == (hermes_cdp_agent)0x2) {
-      return;
-    }
-    
-    auto vtable = getHermesApiVTable();
-    if (vtable) {
-      vtable->release_cdp_agent(cdp_agent);
-    }
-  }
+class HermesCdpAgentDeleter {
+ public:
+  void operator()(hermes_cdp_agent cdp_agent);
 };
 
-struct HermesCdpStateDeleter {
-  void operator()(hermes_cdp_state cdp_state) {
-    // Skip deletion for stub/dummy values to prevent crashes
-    if (cdp_state == nullptr || 
-        cdp_state == (hermes_cdp_state)0x1 || 
-        cdp_state == (hermes_cdp_state)0x2) {
-      return;
-    }
-    
-    auto vtable = getHermesApiVTable();
-    if (vtable) {
-      vtable->release_cdp_state(cdp_state);
-    }
-  }
+class HermesCdpStateDeleter {
+ public:
+  void operator()(hermes_cdp_state cdp_state);
 };
 
-struct HermesStackTraceDeleter {
-  void operator()(hermes_stack_trace stack_trace) {
-    // Skip deletion for stub/dummy values to prevent crashes
-    if (stack_trace == nullptr || 
-        stack_trace == (hermes_stack_trace)0x1 || 
-        stack_trace == (hermes_stack_trace)0x2) {
-      return;
-    }
-    
-    auto vtable = getHermesApiVTable();
-    if (vtable) {
-      vtable->release_stack_trace(stack_trace);
-    }
-  }
+class HermesStackTraceDeleter {
+ public:
+  void operator()(hermes_stack_trace stack_trace);
 };
 
 using HermesUniqueCdpDebugger = std::unique_ptr<hermes_cdp_debugger_s, HermesCdpDebuggerDeleter>;
@@ -160,22 +91,23 @@ using HermesUniqueCdpAgent = std::unique_ptr<hermes_cdp_agent_s, HermesCdpAgentD
 using HermesUniqueCdpState = std::unique_ptr<hermes_cdp_state_s, HermesCdpStateDeleter>;
 using HermesUniqueStackTrace = std::unique_ptr<hermes_stack_trace_s, HermesStackTraceDeleter>;
 
-struct HermesApi2 {
-  HermesApi2() = default;
+class HermesDebuggerApi {
+ public:
+  HermesDebuggerApi() = delete;
 
-  void checkStatus(hermes_status status) {
+  static void checkStatus(hermes_status status) {
     if (status != hermes_status_ok) {
       throw std::runtime_error("Hermes API call failed");
     }
   }
 
-  HermesUniqueCdpDebugger createCdpDebugger(hermes_runtime runtime) {
+  static HermesUniqueCdpDebugger createCdpDebugger(hermes_runtime runtime) {
     hermes_cdp_debugger cdp_debugger{};
     checkStatus(vtable->create_cdp_debugger(runtime, &cdp_debugger));
     return HermesUniqueCdpDebugger{cdp_debugger};
   }
 
-  HermesUniqueCdpAgent createCdpAgent(
+  static HermesUniqueCdpAgent createCdpAgent(
       hermes_cdp_debugger cdpDebugger,
       int32_t execitionContextId,
       hermes_enqueue_runtime_task_functor enqueueRuntimeTaskCallback,
@@ -192,40 +124,56 @@ struct HermesApi2 {
     return HermesUniqueCdpAgent{cdp_agent};
   }
 
-  HermesUniqueCdpState getCdpState(hermes_cdp_agent cdp_agent) {
+  static HermesUniqueCdpState getCdpState(hermes_cdp_agent cdp_agent) {
     hermes_cdp_state cdp_state{};
     checkStatus(vtable->get_cdp_state(cdp_agent, &cdp_state));
     return HermesUniqueCdpState{cdp_state};
   }
 
-  HermesUniqueStackTrace captureStackTrace(hermes_runtime runtime) {
+  static HermesUniqueStackTrace captureStackTrace(hermes_runtime runtime) {
     hermes_stack_trace stack_trace{};
     checkStatus(vtable->capture_stack_trace(runtime, &stack_trace));
     return HermesUniqueStackTrace{stack_trace};
   }
 
-  void handleCommand(hermes_cdp_agent cdpAgent, const char *jsonUtf8, size_t jsonSize) {
+  static void handleCommand(hermes_cdp_agent cdpAgent, const char *jsonUtf8, size_t jsonSize) {
     checkStatus(vtable->cdp_agent_handle_command(cdpAgent, jsonUtf8, jsonSize));
   }
 
-  void enableRuntimeDomain(hermes_cdp_agent cdpAgent) {
+  static void enableRuntimeDomain(hermes_cdp_agent cdpAgent) {
     checkStatus(vtable->cdp_agent_enable_runtime_domain(cdpAgent));
   }
 
-  void enableDebuggerDomain(hermes_cdp_agent cdpAgent) {
+  static void enableDebuggerDomain(hermes_cdp_agent cdpAgent) {
     checkStatus(vtable->cdp_agent_enable_debugger_domain(cdpAgent));
   }
 
  private:
-  hermes_api_vtable vtable{getHermesApiVTable()};
-  
+  friend HermesCdpDebuggerDeleter;
+  friend HermesCdpAgentDeleter;
+  friend HermesCdpStateDeleter;
+  friend HermesStackTraceDeleter;
+  static hermes_debugger_vtable *vtable;
 };
 
-} // namespace facebook::hermes
+inline void HermesCdpDebuggerDeleter::operator()(hermes_cdp_debugger cdp_debugger) {
+  HermesDebuggerApi::vtable->release_cdp_debugger(cdp_debugger);
+}
 
-namespace Microsoft::ReactNative {
+inline void HermesCdpAgentDeleter::operator()(hermes_cdp_agent cdp_agent) {
+  HermesDebuggerApi::vtable->release_cdp_agent(cdp_agent);
+}
 
-class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit, public std::enable_shared_from_this<HermesRuntimeHolder> {
+inline void HermesCdpStateDeleter::operator()(hermes_cdp_state cdp_state) {
+  HermesDebuggerApi::vtable->release_cdp_state(cdp_state);
+}
+
+inline void HermesStackTraceDeleter::operator()(hermes_stack_trace stack_trace) {
+  HermesDebuggerApi::vtable->release_stack_trace(stack_trace);
+}
+
+class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
+                            public std::enable_shared_from_this<HermesRuntimeHolder> {
  public: // RuntimeHolderLazyInit implementation.
   std::shared_ptr<facebook::jsi::Runtime> getRuntime() noexcept override;
   facebook::react::JSIEngineOverride getRuntimeType() noexcept override;
@@ -272,40 +220,11 @@ class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit, public
   std::shared_ptr<facebook::jsi::PreparedScriptStore> m_preparedScriptStore;
 };
 
-// TODO: (vmoroz) what is this runtime?
 class HermesJSRuntime final : public facebook::react::JSRuntime {
  public:
   HermesJSRuntime(std::shared_ptr<Microsoft::JSI::RuntimeHolderLazyInit> hermesRuntimeHolder);
 
   facebook::jsi::Runtime &getRuntime() noexcept override;
-  //void addConsoleMessage(facebook::jsi::Runtime &runtime, facebook::react::jsinspector_modern::ConsoleMessage message)
-  //  override;
-  //bool supportsConsole() const override;
-  //std::unique_ptr<facebook::react::jsinspector_modern::StackTrace> captureStackTrace(
-  //    facebook::jsi::Runtime &runtime,
-  //    size_t framesToSkip = 0) override;
-  //
-  ///**
-  // * Start sampling profiler.
-  // */
-  //void enableSamplingProfiler() override;
-
-  ///**
-  // * Stop sampling profiler.
-  // */
-  //void disableSamplingProfiler() override;
-
-  ///**
-  // * Return recorded sampling profile for the previous sampling session.
-  // */
-  //facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile collectSamplingProfile() override;
-
-  //std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate> createAgentDelegate(
-  //    facebook::react::jsinspector_modern::FrontendChannel frontendChannel,
-  //    facebook::react::jsinspector_modern::SessionState &sessionState,
-  //    std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate::ExportedState> previouslyExportedState,
-  //    const facebook::react::jsinspector_modern::ExecutionContextDescription &executionContextDescription,
-  //    facebook::react::RuntimeExecutor runtimeExecutor) override;
 
   facebook::react::jsinspector_modern::RuntimeTargetDelegate &getRuntimeTargetDelegate() override;
 

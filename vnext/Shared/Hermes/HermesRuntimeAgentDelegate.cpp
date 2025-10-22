@@ -16,8 +16,6 @@
 
 #include <jsinspector-modern/ReactCdp.h>
 
-// TODO: (vmoroz) remove this namespace?
-using namespace facebook::hermes;
 using namespace facebook::react::jsinspector_modern;
 
 namespace Microsoft::ReactNative {
@@ -51,24 +49,30 @@ HermesRuntimeAgentDelegate::HermesRuntimeAgentDelegate(
     hermes_runtime runtime,
     HermesRuntimeTargetDelegate &runtimeTargetDelegate,
     facebook::react::RuntimeExecutor runtimeExecutor)
-    : hermesCdpAgent_(HermesApi2().createCdpAgent(
-          runtimeTargetDelegate.getCdpDebugger(),
-          executionContextDescription.id,
-          // RuntimeTask takes a HermesRuntime whereas our RuntimeExecutor takes a jsi::Runtime.
-          AsFunctor<hermes_enqueue_runtime_task_functor>([runtimeExecutor = std::move(runtimeExecutor),
-                                                          runtime](hermes_runtime_task_functor runtimeTask) {
-            runtimeExecutor([runtime, fn = std::make_shared<FunctorWrapper<hermes_runtime_task_functor>>(runtimeTask)](
-                                auto &) { (*fn)(runtime); });
-          }),
-          AsFunctor<hermes_enqueue_frontend_message_functor>(
-              [frontendChannel = std::move(frontendChannel)](const char *json_utf8, size_t json_size) {
-                frontendChannel(std::string_view(json_utf8, json_size));
-              }),
-          HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()).release())) {
+    : hermesCdpAgent_(
+          HermesDebuggerApi::createCdpAgent(
+              runtimeTargetDelegate.getCdpDebugger(),
+              executionContextDescription.id,
+              // Adapt std::function<void(std::function<void(jsi::Runtime& runtime)>&& callback)>
+              // to hermes_enqueue_runtime_task_functor
+              AsFunctor<hermes_enqueue_runtime_task_functor>(
+                  [runtimeExecutor = std::move(runtimeExecutor), runtime](hermes_runtime_task_functor runtimeTask) {
+                    // Adapt std::function<void(jsi::Runtime& runtime)> to hermes_runtime_task_functor
+                    runtimeExecutor(
+                        [runtime, fn = std::make_shared<FunctorWrapper<hermes_runtime_task_functor>>(runtimeTask)](
+                            // TODO: (vmoroz) ideally we must retrieve hermes_runtime from the jsi::Runtime
+                            facebook::jsi::Runtime &rt) { (*fn)(runtime); });
+                  }),
+              // Adapt void(const char *json_utf8, size_t json_size) to std::function<void(std::string_view)>
+              AsFunctor<hermes_enqueue_frontend_message_functor>(
+                  [frontendChannel = std::move(frontendChannel)](const char *json_utf8, size_t json_size) {
+                    frontendChannel(std::string_view(json_utf8, json_size));
+                  }),
+              HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()).release())) {
   // Always enable both domains for debugging
   // TODO: move enableRuntimeDomain and enableDebuggerDomain for conditional handling
-  HermesApi2().enableRuntimeDomain(hermesCdpAgent_.get());
-  HermesApi2().enableDebuggerDomain(hermesCdpAgent_.get());
+  HermesDebuggerApi::enableRuntimeDomain(hermesCdpAgent_.get());
+  HermesDebuggerApi::enableDebuggerDomain(hermesCdpAgent_.get());
 
   // TODO: find isRuntimeDomainEnabled and isDebuggerDomainEnabled why not enabled
   if (sessionState.isRuntimeDomainEnabled) {
@@ -89,12 +93,12 @@ bool HermesRuntimeAgentDelegate::handleRequest(const cdp::PreparsedRequest &req)
   }
 
   std::string json = req.toJson();
-  HermesApi2().handleCommand(hermesCdpAgent_.get(), json.c_str(), json.size());
+  HermesDebuggerApi::handleCommand(hermesCdpAgent_.get(), json.c_str(), json.size());
   return true;
 }
 
 std::unique_ptr<RuntimeAgentDelegate::ExportedState> HermesRuntimeAgentDelegate::getExportedState() {
-  return std::make_unique<HermesStateWrapper>(HermesApi2().getCdpState(hermesCdpAgent_.get()));
+  return std::make_unique<HermesStateWrapper>(HermesDebuggerApi::getCdpState(hermesCdpAgent_.get()));
 }
 
 } // namespace Microsoft::ReactNative
