@@ -63,7 +63,7 @@ HermesApi &initHermesApi() noexcept {
   static HermesFuncResolver funcResolver;
   static HermesApi s_hermesApi(&funcResolver);
   HermesApi::setCurrent(&s_hermesApi);
-  CRASH_ON_ERROR(s_hermesApi.hermes_set_inspector(&addInspectorPage, &removeInspectorPage));
+  //CRASH_ON_ERROR(s_hermesApi.hermes_set_inspector(&addInspectorPage, &removeInspectorPage));
   const hermes_debugger_vtable *debuggerVTable{};
   s_hermesApi.hermes_get_debugger_vtable(&debuggerVTable);
   setHermesDebuggerVTable(debuggerVTable);
@@ -336,10 +336,10 @@ void HermesRuntimeHolder::initRuntime() noexcept {
   jsr_config config{};
   CRASH_ON_ERROR(api.jsr_create_config(&config));
   CRASH_ON_ERROR(api.hermes_config_enable_default_crash_handler(config, devSettings->enableDefaultCrashHandler));
-  CRASH_ON_ERROR(api.jsr_config_enable_inspector(config, devSettings->useDirectDebugger));
-  CRASH_ON_ERROR(api.jsr_config_set_inspector_runtime_name(config, devSettings->debuggerRuntimeName.c_str()));
-  CRASH_ON_ERROR(api.jsr_config_set_inspector_port(config, devSettings->debuggerPort));
-  CRASH_ON_ERROR(api.jsr_config_set_inspector_break_on_start(config, devSettings->debuggerBreakOnNextLine));
+  //CRASH_ON_ERROR(api.jsr_config_enable_inspector(config, devSettings->useDirectDebugger));
+  //CRASH_ON_ERROR(api.jsr_config_set_inspector_runtime_name(config, devSettings->debuggerRuntimeName.c_str()));
+  //CRASH_ON_ERROR(api.jsr_config_set_inspector_port(config, devSettings->debuggerPort));
+  //CRASH_ON_ERROR(api.jsr_config_set_inspector_break_on_start(config, devSettings->debuggerBreakOnNextLine));
   CRASH_ON_ERROR(api.jsr_config_set_explicit_microtasks(
       config, facebook::react::ReactNativeFeatureFlags::enableBridgelessArchitecture()));
 
