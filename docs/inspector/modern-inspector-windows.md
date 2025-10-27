@@ -1630,6 +1630,256 @@ Production builds with debugging enabled:
 - ⚠️ **Disable in production** for security
 - 🔧 **Use `UseDirectDebugger = true`** for non-Metro debugging
 
+## JavaScript Source Resolution: Bundle vs Packager
+
+### Overview
+
+A critical aspect of understanding React Native Windows debugging is knowing **how the system decides** whether to load JavaScript from a **local bundle file** or from the **Metro packager server**. This decision affects debugging availability and behavior.
+
+### The Decision Logic
+
+The choice between bundle file and packager is made in `InstanceImpl::loadBundleInternal()` based on **three conditions**:
+
+```cpp
+// From vnext/Shared/OInstance.cpp
+void InstanceImpl::loadBundleInternal(std::string &&jsBundleRelativePath, bool synchronously) {
+  if (m_devSettings->useWebDebugger ||           // ①
+      m_devSettings->liveReloadCallback != nullptr ||  // ②
+      m_devSettings->useFastRefresh) {           // ③
+    
+    // Load from PACKAGER SERVER
+    LoadRemoteUrlScript(m_devSettings, m_devManager, std::move(jsBundleRelativePath), ...);
+    
+  } else {
+    // Load from BUNDLE FILE
+    auto bundleString = JsBigStringFromPath(m_devSettings, jsBundleRelativePath);
+    m_innerInstance->loadScriptFromString(std::move(bundleString), ...);
+  }
+}
+```
+
+**JavaScript is loaded from the packager if ANY of these is true:**
+1. ① **`UseWebDebugger = true`** - Remote debugging via browser
+2. ② **Live Reload is enabled** - `UseLiveReload = true`
+3. ③ **Fast Refresh is enabled** - `UseFastRefresh = true`
+
+**JavaScript is loaded from a local bundle if ALL are false.**
+
+### Configuration Mapping
+
+The conditions map to `ReactInstanceSettings` properties:
+
+```cpp
+// ReactNativeHost.cpp - Settings flow to DevSettings
+reactOptions.SetUseWebDebugger(m_instanceSettings.UseWebDebugger());
+reactOptions.SetUseFastRefresh(m_instanceSettings.UseFastRefresh());
+reactOptions.SetUseLiveReload(m_instanceSettings.UseLiveReload());
+```
+
+| Setting | Effect | Default |
+|---------|--------|---------|
+| `UseDeveloperSupport` | Enables dev menu, RedBox, enables conditions for packager | `false` |
+| `UseWebDebugger` | ① Forces packager load, remote JS debugging | `false` |
+| `UseFastRefresh` | ③ Forces packager load, enables Hot Module Replacement | `false` |
+| `UseLiveReload` | ② Forces packager load, auto-reload on changes | `false` |
+| `UseDirectDebugger` | Enables direct CDP server (works with either source) | `false` |
+
+### Packager Loading: How It Works
+
+When loading from packager, the system:
+
+1. **Constructs Bundle URL**:
+   ```cpp
+   // URL format: http://{host}:{port}/{bundlePath}?platform=windows&dev=true&app={appId}
+   auto bundleUrl = DevServerHelper::get_BundleUrl(
+       devSettings->sourceBundleHost,      // Default: "localhost"
+       devSettings->sourceBundlePort,      // Default: 8081
+       jsBundleRelativePath,               // e.g., "index.windows"
+       devSettings->platformName,          // "windows"
+       devSettings->bundleAppId,           // From BundleAppId setting
+       devSettings->devBundle,             // true for dev builds
+       devSettings->useFastRefresh,
+       devSettings->inlineSourceMap,
+       hermesBytecodeVersion);
+   ```
+
+2. **Downloads JavaScript**:
+   ```cpp
+   auto [jsBundleString, success] = GetJavaScriptFromServer(...);
+   ```
+   
+   Example request: `http://localhost:8081/index.windows.bundle?platform=windows&dev=true&app=myapp`
+
+3. **Handles Hermes Bytecode** (if enabled):
+   - Detects HBC magic number: `0xC61FC35`
+   - Parses multi-module HBC format
+   - Loads each module segment
+
+4. **Loads Script**:
+   ```cpp
+   m_innerInstance->loadScriptFromString(script, bundleUrl, false);
+   ```
+
+### Bundle File Loading: How It Works
+
+When loading from bundle file, the system:
+
+1. **Resolves Bundle Path**:
+   ```cpp
+   // Path construction: {BundleRootPath}/{JavaScriptBundleFile}
+   std::wstring bundlePath;
+   
+   if (devSettings->bundleRootPath.starts_with("resource://")) {
+     // RCDATA embedded resource
+     auto uri = Uri(to_hstring(bundleRootPath), to_hstring(jsBundleRelativePath));
+     bundlePath = uri.ToString();
+   } else {
+     // File system path
+     bundlePath = (fs::path(bundleRootPath) / (jsBundleRelativePath + ".bundle")).wstring();
+   }
+   ```
+
+2. **Memory-Maps File**:
+   ```cpp
+   // Win32: Direct file mapping
+   auto bundleString = FileMappingBigString::fromPath(bundlePath);
+   
+   // UWP: StorageFile access
+   auto bundleString = StorageFileBigString(bundlePath);
+   ```
+
+3. **Loads Script**:
+   ```cpp
+   m_innerInstance->loadScriptFromString(bundleString, jsBundleRelativePath, synchronously);
+   ```
+
+### Common Configuration Scenarios
+
+#### Scenario 1: Development with Metro (Typical)
+```cpp
+auto settings = ReactInstanceSettings();
+settings.UseDeveloperSupport(true);      // Enable dev features
+settings.UseFastRefresh(true);           // ③ Triggers packager load
+settings.JavaScriptBundleFile(L"index.windows");
+settings.SourceBundleHost(L"localhost");
+settings.SourceBundlePort(8081);
+```
+**Result**: Loads from `http://localhost:8081/index.windows.bundle?platform=windows&dev=true`
+
+#### Scenario 2: Production with Bundle
+```cpp
+auto settings = ReactInstanceSettings();
+settings.UseDeveloperSupport(false);     // Disable dev features
+settings.BundleRootPath(L"ms-appx:///Bundle/");
+settings.JavaScriptBundleFile(L"index.windows");
+```
+**Result**: Loads from `ms-appx:///Bundle/index.windows.bundle` (embedded resource)
+
+#### Scenario 3: Bundle with Direct Debugging
+```cpp
+auto settings = ReactInstanceSettings();
+settings.UseDeveloperSupport(true);      // Enable dev menu
+settings.UseFastRefresh(false);          // Don't force packager
+settings.UseLiveReload(false);           // Don't force packager
+settings.UseDirectDebugger(true);        // Enable CDP server
+settings.BundleRootPath(L"C:\\App\\");
+settings.JavaScriptBundleFile(L"index.windows");
+```
+**Result**: Loads from `C:\App\index.windows.bundle` + Direct debugging available
+
+#### Scenario 4: Multiple RNH Instances from Different Sources
+```cpp
+// Instance 1: Development from Metro
+auto settings1 = ReactInstanceSettings();
+settings1.UseFastRefresh(true);
+settings1.BundleAppId(L"app1");
+auto host1 = ReactNativeHost();
+host1.InstanceSettings(settings1);
+
+// Instance 2: Production from bundle
+auto settings2 = ReactInstanceSettings();
+settings2.BundleRootPath(L"ms-appx:///Bundle/");
+settings2.JavaScriptBundleFile(L"app2");
+auto host2 = ReactNativeHost();
+host2.InstanceSettings(settings2);
+```
+**Result**: 
+- `host1` loads from packager: `http://localhost:8081/index.windows.bundle?app=app1`
+- `host2` loads from bundle: `ms-appx:///Bundle/app2.bundle`
+- Both can be debugged independently
+
+### Impact on Debugging
+
+| JavaScript Source | Modern Inspector (Fusebox) | Direct Debugger | Web Debugger |
+|-------------------|------------------------------|-----------------|--------------|
+| **Packager** | ✅ Full support | ✅ Works | ✅ Works |
+| **Bundle File** | ✅ Full support | ✅ Works | ❌ Incompatible* |
+
+*Web debugging requires packager because it loads JS into the browser's JavaScript engine instead of Hermes/Chakra.
+
+**Key Insight**: Modern inspector (Fusebox) and direct debugging work with **either source** because they:
+- Register `HostTarget` during `ReactNativeHost` construction (before JS loads)
+- Connect to the actual runtime (Hermes/Chakra) via CDP
+- Don't depend on where JavaScript came from
+
+### Best Practices
+
+1. **Development Workflow**:
+   - Use `UseFastRefresh = true` for best developer experience
+   - JavaScript automatically loads from Metro
+   - Changes reflect immediately without full reload
+
+2. **Testing Production Bundles**:
+   - Set all packager triggers to `false`
+   - Enable `UseDirectDebugger = true` for debugging
+   - Test with actual bundle files to catch bundling issues
+
+3. **Multi-Instance Apps**:
+   - Use different `BundleAppId` values to distinguish instances in Metro
+   - Each instance can use different sources independently
+   - Consider which instances need hot reload vs stable bundles
+
+4. **Conditional Configuration**:
+   ```cpp
+   #if _DEBUG
+     settings.UseDeveloperSupport(true);
+     settings.UseFastRefresh(true);
+     settings.UseDirectDebugger(true);
+   #else
+     settings.UseDeveloperSupport(false);
+     settings.BundleRootPath(L"ms-appx:///Bundle/");
+   #endif
+   ```
+
+### Common Pitfalls
+
+**Pitfall 1: Bundle Not Found**
+```
+Error: Cannot find bundle file at C:\App\index.windows.bundle
+```
+**Solution**: Ensure bundle is built and `BundleRootPath` is correct
+
+**Pitfall 2: Packager Connection Failed**
+```
+Error: A connection with the server http://localhost:8081 could not be established
+```
+**Solution**: Start Metro (`npx react-native start`) or disable packager triggers
+
+**Pitfall 3: Unexpected Packager Load**
+```
+// Intent: Load from bundle
+settings.UseFastRefresh(true);  // ⚠️ This forces packager load!
+settings.BundleRootPath(L"...");
+```
+**Solution**: Set `UseFastRefresh = false` to load from bundle
+
+**Pitfall 4: Can't Debug Bundle**
+```
+// Intent: Debug bundled JS
+settings.UseWebDebugger(true);  // ⚠️ Forces packager load + incompatible with bundle
+```
+**Solution**: Use `UseDirectDebugger = true` instead
+
 ## Multi-RNH Recommendations Summary
 
 ### For Multiple RNH Instances
