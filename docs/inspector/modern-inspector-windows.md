@@ -1224,6 +1224,426 @@ The **only potential improvement**:
 
 The current Windows implementation correctly follows iOS/Android patterns in all key areas!
 
+## Multi-RNH Windows-Specific Considerations
+
+### Overview
+
+While iOS and Android typically support a single React instance per app, React Native Windows supports **multiple `ReactNativeHost` (RNH) instances simultaneously** within a single process. This is a **prime scenario** in Windows applications where you might embed multiple React Native views/windows.
+
+This section addresses two critical questions unique to multi-RNH scenarios:
+1. How does the packager service associate with specific RNH instances?
+2. Can we debug RNH instances that load JavaScript from a bundle (not the packager)?
+
+### Question 1: Packager Service Association with Specific RNH Instances
+
+#### Current Architecture Analysis
+
+```
+Metro Packager (port 8081)
+    ↓ (Single WebSocket)
+InspectorPackagerConnection (Singleton)
+    ↓ (Manages all pages)
+getInspectorInstance() (Global)
+    ├─ Page 1 (id: 1) → RNH #1 (bundleAppId: "app1")
+    ├─ Page 2 (id: 2) → RNH #2 (bundleAppId: "app2")
+    └─ Page 3 (id: 3) → RNH #3 (bundleAppId: "app3")
+```
+
+**Key Implementation Details**:
+
+1. **Single WebSocket for All RNH Instances**:
+   ```cpp
+   // DevSupportManager.cpp - called with std::call_once
+   m_fuseboxInspectorPackagerConnection = 
+       std::make_unique<InspectorPackagerConnection>(
+           getInspectorInstance(),  // Global inspector with ALL pages
+           "React Native Windows",  // appName (shared by all)
+           delegate);
+   ```
+
+2. **Page Registration** (per RNH):
+   ```cpp
+   // ReactNativeHost.cpp - each instance registers its own page
+   m_inspectorPageId = getInspectorInstance().addPage(
+       "React Native Windows (Experimental)",  // description
+       "",  // vm
+       connectFunc,
+       capabilities);
+   ```
+
+3. **Metro's "getPages" Request Handling**:
+   ```cpp
+   // InspectorPackagerConnection.cpp
+   void Impl::handleProxyMessage(folly::const_dynamic_view message) {
+     if (event == "getPages") {
+       sendToPackager(
+           folly::dynamic::object("event", "getPages")("payload", pages()));
+     }
+   }
+   
+   folly::dynamic Impl::pages() {
+     auto pages = getInspectorInstance().getPages();  // Gets ALL registered pages
+     folly::dynamic array = folly::dynamic::array();
+     
+     for (const auto& page : pages) {
+       folly::dynamic pageDescription = folly::dynamic::object;
+       pageDescription["id"] = std::to_string(page.id);
+       pageDescription["title"] = appName_ + " (" + deviceName_ + ")";  // ⚠️ SAME for all
+       pageDescription["description"] = page.description + " [C++ connection]";
+       pageDescription["app"] = appName_;  // ⚠️ SAME for all
+       // ...
+       array.push_back(pageDescription);
+     }
+     return array;
+   }
+   ```
+
+4. **InspectorPageDescription Structure**:
+   ```cpp
+   // InspectorInterfaces.h
+   struct InspectorPageDescription {
+     const int id;                        // ✅ Unique per page
+     const std::string description;       // ⚠️ Same for all Windows instances
+     const std::string vm;                // Empty
+     const InspectorTargetCapabilities capabilities;
+   };
+   ```
+
+#### The Problem: Insufficient Page Differentiation
+
+**Current State**: All RNH instances appear in Metro with:
+- Different `id` (unique page IDs: 1, 2, 3...)
+- **Same** `title`: "React Native Windows (Device Name)"
+- **Same** `app`: "React Native Windows"
+- **Same** `description`: "React Native Windows (Experimental) [C++ connection]"
+
+**Example Metro Response**:
+```json
+{
+  "event": "getPages",
+  "payload": [
+    {
+      "id": "1",
+      "title": "React Native Windows (DESKTOP-ABC)",
+      "description": "React Native Windows (Experimental) [C++ connection]",
+      "app": "React Native Windows"
+    },
+    {
+      "id": "2",
+      "title": "React Native Windows (DESKTOP-ABC)",  // ⚠️ Identical!
+      "description": "React Native Windows (Experimental) [C++ connection]",  // ⚠️ Identical!
+      "app": "React Native Windows"  // ⚠️ Identical!
+    }
+  ]
+}
+```
+
+**Impact**: While Metro can technically route to the correct page using the unique `id`, **developers cannot distinguish between multiple instances** when looking at the debugger page list.
+
+#### Why bundleAppId Isn't Visible to Metro
+
+The `bundleAppId` configuration flows through the system but **never becomes part of the page metadata**:
+
+```cpp
+// ReactNativeHost.cpp
+reactOptions.DeveloperSettings.BundleAppId = to_string(m_instanceSettings.BundleAppId());
+
+// Used for bundle URLs like: http://localhost:8081/index.bundle?app=myapp
+// But NOT exposed to inspector page descriptions
+```
+
+**Root Cause**: `InspectorPageDescription` doesn't include `HostTargetMetadata`, where per-instance information could be stored:
+
+```cpp
+// HostTarget.h - metadata is available but not exposed
+struct HostTargetMetadata {
+  std::optional<std::string> appDisplayName;
+  std::optional<std::string> appIdentifier;
+  std::optional<std::string> deviceName;
+  std::string integrationName;  // Currently: "React Native Windows (Host)"
+  std::optional<std::string> platform;
+  std::optional<std::string> reactNativeVersion;
+};
+```
+
+#### The Solution: Enhance Page Description with RNH-Specific Identifiers
+
+**Recommendation 1**: Include instance-specific information in the page `description`:
+
+```cpp
+// ReactNativeHost.cpp - generate unique description per instance
+std::string GeneratePageDescription() {
+  std::string desc = "React Native Windows";
+  
+  // Option A: Use bundleAppId if available
+  if (m_instanceSettings.BundleAppId()) {
+    desc += " (" + to_string(m_instanceSettings.BundleAppId()) + ")";
+  }
+  
+  // Option B: Use ReactNativeHost address as fallback
+  else {
+    std::ostringstream oss;
+    oss << " (Host 0x" << std::hex << reinterpret_cast<uintptr_t>(this) << ")";
+    desc += oss.str();
+  }
+  
+  return desc;
+}
+
+// Use in addPage:
+m_inspectorPageId = getInspectorInstance().addPage(
+    GeneratePageDescription(),  // ✅ Now unique per instance
+    "",
+    connectFunc,
+    capabilities);
+```
+
+**Result in Metro**:
+```json
+{
+  "payload": [
+    {
+      "id": "1",
+      "description": "React Native Windows (myapp) [C++ connection]",
+      "app": "React Native Windows"
+    },
+    {
+      "id": "2",
+      "description": "React Native Windows (otherapp) [C++ connection]",
+      "app": "React Native Windows"
+    }
+  ]
+}
+```
+
+**Recommendation 2**: Enhance `HostTargetMetadata` with instance-specific data:
+
+```cpp
+// ReactNativeHost.cpp
+facebook::react::jsinspector_modern::HostTargetMetadata getMetadata() override {
+  auto host = m_reactNativeHost.get();
+  return {
+      .appDisplayName = host ? winrt::to_string(host.InstanceSettings().BundleAppId()) : std::nullopt,
+      .integrationName = "React Native Windows (Host)",
+      .platform = "windows",
+      .reactNativeVersion = "0.76.0",  // From version constants
+  };
+}
+```
+
+While this metadata is used internally (passed to `HostAgent`), it's **not currently sent to Metro**. This would require enhancing the cross-platform `InspectorPageDescription` structure, which is outside Windows-specific changes.
+
+**Recommendation 3**: Allow custom packager connection per RNH group:
+
+For advanced scenarios where different RNH instances connect to **different Metro packagers**:
+
+```cpp
+// Extend DevSupportManager to support multiple connections
+std::shared_ptr<InspectorPackagerConnection> GetOrCreatePackagerConnection(
+    const std::string& host, 
+    uint16_t port,
+    const std::string& appName) {
+  std::string key = host + ":" + std::to_string(port);
+  
+  auto it = m_packagerConnections.find(key);
+  if (it != m_packagerConnections.end()) {
+    return it->second;
+  }
+  
+  auto connection = std::make_shared<InspectorPackagerConnection>(
+      getInspectorInstance(),
+      appName,  // Now per-connection
+      delegate);
+  
+  m_packagerConnections[key] = connection;
+  return connection;
+}
+```
+
+**Summary for Question 1**:
+- ✅ **Current routing works**: Metro routes by unique page ID
+- ⚠️ **Developer experience issue**: Can't distinguish instances in debugger page list
+- ✅ **Fix is straightforward**: Include `bundleAppId` or instance identifier in page description
+- 🔧 **Recommended**: Implement unique descriptions in `ReactNativeHost::ReactNativeHost()`
+
+### Question 2: Debugging RNH Instances with Bundled JavaScript
+
+#### Architecture: Two Inspector Connection Types
+
+The modern inspector supports **two modes of connection**:
+
+**Mode 1: Metro Proxy (Development)**
+```
+Chrome DevTools → Metro Packager (ws://localhost:8081/inspector/device)
+                      ↓
+                  InspectorPackagerConnection
+                      ↓
+                  getInspectorInstance()
+                      ↓
+                  HostTarget → InstanceTarget → RuntimeTarget
+```
+
+**Mode 2: Direct CDP Connection (Development & Production)**
+```
+Chrome DevTools → Direct WebSocket (ws://localhost:8315)
+                      ↓
+                  getInspectorInstance()
+                      ↓
+                  HostTarget → InstanceTarget → RuntimeTarget
+```
+
+#### Can Bundled JS Be Debugged?
+
+**Answer: YES** ✅
+
+**Reasoning**:
+
+1. **HostTarget Registration is Independent**:
+   ```cpp
+   // ReactNativeHost.cpp - happens regardless of bundle source
+   if (inspectorFlags.getFuseboxEnabled()) {
+     m_inspectorTarget = HostTarget::create(*m_inspectorHostDelegate, executor);
+     m_inspectorPageId = getInspectorInstance().addPage(...);  // ✅ Always registers
+   }
+   ```
+   
+   Page registration happens in the `ReactNativeHost` constructor **before** JavaScript is loaded, and doesn't depend on where the JS comes from (packager vs bundle).
+
+2. **InspectorPackagerConnection is Optional**:
+   ```cpp
+   // DevSupportManager.cpp
+   void EnsureHermesInspector(...) {
+     if (!m_fuseboxInspectorPackagerConnection) {
+       m_fuseboxInspectorPackagerConnection = 
+           std::make_unique<InspectorPackagerConnection>(...);
+     }
+   }
+   ```
+   
+   `InspectorPackagerConnection` is only needed for **Metro-proxied debugging**. It's not required for:
+   - Direct CDP connections
+   - Local inspector functionality
+   - Debugging bundled JS
+
+3. **Direct CDP Server**:
+   
+   React Native Windows can expose a **direct CDP server** (enabled via `ReactInstanceSettings.UseDirectDebugger = true`):
+   
+   ```cpp
+   // Creates a WebSocket server that accepts direct CDP connections
+   // No Metro required!
+   auto cdpServer = std::make_unique<CDPServer>(port);
+   cdpServer->listen();
+   ```
+   
+   This allows Chrome DevTools to connect directly via `chrome://inspect` → "Configure..." → `localhost:8315` without Metro involvement.
+
+4. **getInspectorInstance() is Global**:
+   
+   The global inspector registry works regardless of:
+   - JavaScript source (packager/bundle)
+   - Metro connection status
+   - Number of RNH instances
+   
+   ```cpp
+   // Any CDP client can query and connect
+   auto pages = getInspectorInstance().getPages();        // Get all debuggable pages
+   auto connection = getInspectorInstance().connect(1, remote);  // Connect to page 1
+   ```
+
+#### Debugging Scenarios
+
+| Scenario | Metro Connection | Can Debug? | How |
+|----------|------------------|------------|-----|
+| Development with Metro | Yes | ✅ Yes | `chrome://inspect` → Metro proxy |
+| Development without Metro | No | ✅ Yes | Direct CDP server (`UseDirectDebugger`) |
+| Production with bundle | No | ✅ Yes | Direct CDP server if enabled |
+| Multiple RNH, mixed sources | Partial | ✅ Yes | Each RNH registers independently |
+
+#### Practical Example: Debugging Bundled JS
+
+```cpp
+// App configuration
+auto instanceSettings = ReactInstanceSettings();
+instanceSettings.BundleRootPath(L"ms-appx:///Bundle/");  // Load from bundle
+instanceSettings.JavaScriptBundleFile(L"index.windows");
+instanceSettings.UseDirectDebugger(true);                 // ✅ Enable direct debugging
+instanceSettings.DebuggerPort(8315);                      // Custom port
+
+auto host = ReactNativeHost();
+host.InstanceSettings(instanceSettings);
+```
+
+**Debugging Steps**:
+1. App loads JavaScript from bundle (no Metro needed)
+2. App creates `HostTarget` and registers with `getInspectorInstance()`
+3. App starts direct CDP server on port 8315
+4. Developer opens Chrome → `chrome://inspect`
+5. Developer clicks "Configure..." → Adds `localhost:8315`
+6. Developer sees "React Native Windows (bundled)" and clicks "inspect"
+7. Chrome DevTools connects directly via CDP
+8. ✅ **Full debugging works**: breakpoints, console, profiling, etc.
+
+#### Limitations and Considerations
+
+**Limitation 1: Live Reload Unavailable**
+
+When loading from bundle:
+- Metro live reload won't work (no Metro connection)
+- Hot Module Replacement (HMR) unavailable
+- Manual restart required for code changes
+
+**Limitation 2: Source Maps**
+
+Bundled JS requires source maps for readable debugging:
+
+```cpp
+// Ensure source maps are generated and accessible
+instanceSettings.SourceBundleHost(L"localhost");
+instanceSettings.SourceBundlePort(8081);  // For fetching source maps
+
+// Or embed source maps in bundle:
+// metro.config.js: { inlineSourceMap: true }
+```
+
+**Limitation 3: Security**
+
+Production builds with debugging enabled:
+- ⚠️ **Security risk**: Allows remote code execution
+- ⚠️ **Performance impact**: Debugger overhead
+- ✅ **Recommendation**: Disable in production releases or restrict to localhost only
+
+**Best Practice**:
+```cpp
+#if _DEBUG
+  instanceSettings.UseDirectDebugger(true);
+#else
+  instanceSettings.UseDirectDebugger(false);
+#endif
+```
+
+#### Summary for Question 2:
+- ✅ **Yes, bundled JS can be debugged**
+- ✅ **InspectorPackagerConnection is optional** (only for Metro proxy)
+- ✅ **Direct CDP connections work independently**
+- ✅ **All RNH instances debuggable** regardless of JS source
+- ⚠️ **Disable in production** for security
+- 🔧 **Use `UseDirectDebugger = true`** for non-Metro debugging
+
+## Multi-RNH Recommendations Summary
+
+### For Multiple RNH Instances
+1. ✅ **Current architecture is sound**: Global inspector + per-RNH HostTarget
+2. 🔧 **Improve UX**: Add instance-specific identifiers to page descriptions
+3. 🔧 **Use bundleAppId**: Include in description for Metro page list differentiation
+4. ⚠️ **Validate packager settings**: Warn if multiple RNH instances use different Metro endpoints
+
+### For Bundled/Offline Debugging
+1. ✅ **Fully supported**: Use `UseDirectDebugger = true`
+2. ✅ **No Metro required**: Direct CDP connections work
+3. 🔧 **Configure chrome://inspect**: Add direct debugger port
+4. ⚠️ **Security**: Disable in production builds
+
 ### DevSupportManager - Shared Singleton Pattern
 
 **Question**: Is `DevSupportManager` a singleton per application?
