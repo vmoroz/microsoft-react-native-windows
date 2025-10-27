@@ -63,7 +63,7 @@ HermesApi &initHermesApi() noexcept {
   static HermesFuncResolver funcResolver;
   static HermesApi s_hermesApi(&funcResolver);
   HermesApi::setCurrent(&s_hermesApi);
-  CRASH_ON_ERROR(s_hermesApi.hermes_set_inspector(&addInspectorPage, &removeInspectorPage));
+  // CRASH_ON_ERROR(s_hermesApi.hermes_set_inspector(&addInspectorPage, &removeInspectorPage));
   const hermes_debugger_vtable *debuggerVTable{};
   s_hermesApi.hermes_get_debugger_vtable(&debuggerVTable);
   setHermesDebuggerVTable(debuggerVTable);
