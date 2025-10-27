@@ -4,6 +4,15 @@
 
 This document describes the architecture of React Native for Windows (RNW) and analyzes the current state of modern JavaScript debugger (inspector) integration. The modern inspector provides Chrome DevTools Protocol (CDP) support for debugging JavaScript execution in React Native apps, similar to the implementations in React Native for iOS and Android.
 
+## Table of Contents
+
+1. [Core Architecture](#core-architecture)
+2. [CDP Protocol Flow](#cdp-protocol-flow)
+3. [ReactNativeHost](#reactnativehost---the-public-api-entry-point)
+4. [JavaScript Source Resolution](#javascript-source-resolution-bundle-vs-packager)
+5. [Multi-RNH Windows-Specific Considerations](#multi-rnh-windows-specific-considerations)
+6. [Implementation Details](#implementation-details)
+
 ## Core Architecture
 
 ### Key Windows-Specific Components
@@ -31,6 +40,186 @@ ReactInstance (C++ - Cross-platform Bridgeless)
 or
 Instance (C++ - Cross-platform Bridge-based)
 ```
+
+## CDP Protocol Flow
+
+### Overview
+
+The Chrome DevTools Protocol (CDP) defines a structured communication between debugger frontends (Chrome DevTools, VS Code) and runtime agents. Understanding the protocol flow is crucial for implementing inspector features correctly.
+
+### Domain Enablement Protocol
+
+CDP organizes functionality into **domains** (Runtime, Debugger, Log, etc.). Each domain must be explicitly **enabled** by the frontend before it becomes active.
+
+#### Correct Implementation Pattern (iOS/Android)
+
+```cpp
+// From node_modules/react-native/ReactCommon/hermes/inspector-modern/chrome/HermesRuntimeAgentDelegate.cpp
+HermesRuntimeAgentDelegate::Impl::Impl(
+    FrontendChannel frontendChannel,
+    SessionState& sessionState,
+    ...) {
+  
+  // ✅ Only enable domains when session state indicates they were requested
+  if (sessionState.isRuntimeDomainEnabled) {
+    hermes_->enableRuntimeDomain();
+  }
+  if (sessionState.isDebuggerDomainEnabled) {
+    hermes_->enableDebuggerDomain();
+  }
+}
+```
+
+#### Previous Windows Implementation (Incorrect)
+
+```cpp
+// vnext/Shared/Hermes/HermesRuntimeAgentDelegate.cpp (BEFORE FIX)
+HermesRuntimeAgentDelegate::HermesRuntimeAgentDelegate(...) {
+  // ❌ WRONG: Always enable both domains unconditionally
+  HermesDebuggerApi::enableRuntimeDomain(hermesCdpAgent_.get());
+  HermesDebuggerApi::enableDebuggerDomain(hermesCdpAgent_.get());
+}
+```
+
+**Why this was wrong**:
+- Enabled domains before Chrome DevTools requested them
+- Didn't respect CDP protocol flow
+- Caused "was already enabled" warnings
+- Violated separation of concerns (agent shouldn't decide when domains are active)
+
+#### Fixed Windows Implementation
+
+```cpp
+// vnext/Shared/Hermes/HermesRuntimeAgentDelegate.cpp (AFTER FIX)
+HermesRuntimeAgentDelegate::HermesRuntimeAgentDelegate(
+    FrontendChannel frontendChannel,
+    SessionState &sessionState,
+    ...) : hermesCdpAgent_(...) {
+  
+  // ✅ Enable domains conditionally based on session state
+  // This matches the iOS/Android implementation pattern
+  if (sessionState.isRuntimeDomainEnabled) {
+    HermesDebuggerApi::enableRuntimeDomain(hermesCdpAgent_.get());
+  }
+  if (sessionState.isDebuggerDomainEnabled) {
+    HermesDebuggerApi::enableDebuggerDomain(hermesCdpAgent_.get());
+  }
+}
+```
+
+### Protocol Message Flow
+
+When Chrome DevTools connects to a React Native app, the following sequence occurs:
+
+```
+1. Chrome DevTools → Metro/DirectDebugger: WebSocket connection
+   
+2. Chrome → HostAgent: { method: "Runtime.enable" }
+   HostAgent: Sets sessionState.isRuntimeDomainEnabled = true
+   HostAgent → Chrome: { result: {} }  // OK response
+   
+3. HostAgent forwards to InstanceAgent
+   InstanceAgent → RuntimeAgent: handleRequest("Runtime.enable")
+   
+4. RuntimeAgent (HermesRuntimeAgentDelegate):
+   - Constructor was called earlier with sessionState.isRuntimeDomainEnabled = false
+   - Now handleRequest() is called for Runtime.enable
+   - handleRequest() forwards to Hermes CDPAgent
+   - Hermes internally handles Runtime.enable
+   
+5. Chrome → HostAgent: { method: "Debugger.enable" }
+   HostAgent: Sets sessionState.isDebuggerDomainEnabled = true
+   Similar flow as above...
+   
+6. Now debugging is fully active with both domains enabled
+```
+
+### SessionState Structure
+
+```cpp
+// From node_modules/react-native/ReactCommon/jsinspector-modern/SessionState.h
+struct SessionState {
+  // Domain enable flags (all default to false)
+  bool isDebuggerDomainEnabled{false};
+  bool isLogDomainEnabled{false};
+  bool isReactNativeApplicationDomainEnabled{false};
+  bool isRuntimeDomainEnabled{false};
+  
+  // Other session state...
+  std::unordered_map<std::string, ExecutionContextSelectorSet> subscribedBindings;
+  std::vector<SimpleConsoleMessage> pendingSimpleConsoleMessages;
+  RuntimeAgent::ExportedState lastRuntimeAgentExportedState;
+};
+```
+
+### When Session State Flags Get Set
+
+The flags are set by `HostAgent` in response to CDP enable/disable messages:
+
+```cpp
+// From node_modules/react-native/ReactCommon/jsinspector-modern/HostAgent.cpp
+bool HostAgent::handleRequest(const cdp::PreparsedRequest& req) {
+  if (req.method == "Runtime.enable") {
+    sessionState_.isRuntimeDomainEnabled = true;  // ← Set to true
+    shouldSendOKResponse = true;
+    isFinishedHandlingRequest = false;  // Forward to InstanceAgent
+  } 
+  else if (req.method == "Runtime.disable") {
+    sessionState_.isRuntimeDomainEnabled = false;  // ← Set to false
+    shouldSendOKResponse = true;
+    isFinishedHandlingRequest = false;
+  }
+  else if (req.method == "Debugger.enable") {
+    sessionState_.isDebuggerDomainEnabled = true;  // ← Set to true
+    shouldSendOKResponse = true;
+    isFinishedHandlingRequest = false;
+  }
+  else if (req.method == "Debugger.disable") {
+    sessionState_.isDebuggerDomainEnabled = false;  // ← Set to false
+    shouldSendOKResponse = true;
+    isFinishedHandlingRequest = false;
+  }
+  // ... handle request or forward to InstanceAgent
+}
+```
+
+### Why Conditional Enablement Matters
+
+1. **Protocol Compliance**: CDP specification requires domains to be explicitly enabled
+2. **Session Isolation**: Different debug sessions can have different domains enabled
+3. **State Management**: Agents can send domain-specific notifications only when enabled
+4. **Performance**: Domains can skip work when not enabled
+5. **Reconnection**: Session state allows resuming with correct domain configuration
+
+### Agent Hierarchy and Domain Handling
+
+```
+Chrome DevTools (Frontend)
+    ↓ (WebSocket - CDP Messages)
+HostAgent (Top-level, manages domains for the host)
+    ├─ Handles: Runtime.enable, Debugger.enable, Log.enable, etc.
+    ├─ Updates: sessionState.isRuntimeDomainEnabled, etc.
+    └─ Forwards to: InstanceAgent
+        ↓
+InstanceAgent (Per-instance coordination)
+    ├─ Handles: Runtime.enable special case (sends execution context)
+    └─ Forwards to: RuntimeAgent
+        ↓
+RuntimeAgent (Base class for runtime-specific agents)
+    └─ Windows: HermesRuntimeAgentDelegate
+       iOS/Android: HermesRuntimeAgentDelegate::Impl
+       
+       Reads: sessionState.isRuntimeDomainEnabled
+       Calls: hermes->enableRuntimeDomain() if true
+```
+
+### Key Takeaways
+
+1. ✅ **Session state is the source of truth**: Always check `sessionState.is*DomainEnabled` flags
+2. ✅ **Enable domains conditionally**: Only enable when session state says to
+3. ✅ **Match iOS/Android patterns**: Windows should follow the same protocol flow
+4. ❌ **Don't enable unconditionally**: Domains should not be enabled in constructors by default
+5. ✅ **Let HostAgent manage state**: Domain enable/disable is handled at the HostAgent level
 
 ## ReactNativeHost - The Public API Entry Point
 
@@ -1821,6 +2010,50 @@ host2.InstanceSettings(settings2);
 - Register `HostTarget` during `ReactNativeHost` construction (before JS loads)
 - Connect to the actual runtime (Hermes/Chakra) via CDP
 - Don't depend on where JavaScript came from
+
+### Inspector Registration Best Practice
+
+**Recommendation**: Only register inspector pages when `UseDirectDebugger = true`.
+
+This allows the **same compiled RNW library binaries** to be used for both debugging and production scenarios:
+
+```cpp
+// ReactNativeHost constructor
+auto &inspectorFlags = facebook::react::jsinspector_modern::InspectorFlags::getInstance();
+
+// Only create inspector infrastructure when direct debugging is enabled
+if (inspectorFlags.getFuseboxEnabled() && 
+    m_instanceSettings.UseDirectDebugger() &&
+    !m_inspectorPageId.has_value()) {
+  
+  m_inspectorHostDelegate = std::make_shared<ModernInspectorHostTargetDelegate>(*this);
+  m_inspectorTarget = facebook::react::jsinspector_modern::HostTarget::create(
+      *m_inspectorHostDelegate, executor);
+  
+  m_inspectorPageId = getInspectorInstance().addPage(
+      GenerateUniquePageDescription(),  // Include bundleAppId or instance identifier
+      "",
+      connectFunc,
+      capabilities);
+}
+```
+
+**Benefits**:
+- ✅ **Zero overhead in production**: No inspector pages registered when debugging disabled
+- ✅ **Security**: Inspector infrastructure not available in production builds
+- ✅ **Binary compatibility**: Same RNW DLLs work for debug and release configurations
+- ✅ **Microsoft Office scenario**: Production apps can use RNW without debug overhead
+
+**Alternative for development-only builds**:
+```cpp
+#if _DEBUG
+  if (inspectorFlags.getFuseboxEnabled() && !m_inspectorPageId.has_value()) {
+    // Register inspector page...
+  }
+#endif
+```
+
+This preprocessor approach ensures inspector code is completely excluded from release builds at compile time.
 
 ### Best Practices
 

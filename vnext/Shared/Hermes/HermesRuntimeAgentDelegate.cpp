@@ -69,17 +69,14 @@ HermesRuntimeAgentDelegate::HermesRuntimeAgentDelegate(
                     frontendChannel(std::string_view(json_utf8, json_size));
                   }),
               HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()).release())) {
-  // Always enable both domains for debugging
-  // TODO: move enableRuntimeDomain and enableDebuggerDomain for conditional handling
-  HermesDebuggerApi::enableRuntimeDomain(hermesCdpAgent_.get());
-  HermesDebuggerApi::enableDebuggerDomain(hermesCdpAgent_.get());
-
-  // TODO: find isRuntimeDomainEnabled and isDebuggerDomainEnabled why not enabled
+  // Enable domains conditionally based on session state
+  // This matches the iOS/Android implementation pattern:
+  // Domains are enabled in response to Chrome DevTools sending Runtime.enable/Debugger.enable
   if (sessionState.isRuntimeDomainEnabled) {
-    OutputDebugStringA("[RNW] SessionState: Runtime domain was already enabled\n");
+    HermesDebuggerApi::enableRuntimeDomain(hermesCdpAgent_.get());
   }
   if (sessionState.isDebuggerDomainEnabled) {
-    OutputDebugStringA("[RNW] SessionState: Debugger domain was already enabled\n");
+    HermesDebuggerApi::enableDebuggerDomain(hermesCdpAgent_.get());
   }
 }
 
