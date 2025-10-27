@@ -4,6 +4,21 @@
 
 This document describes how the modern JavaScript debugger (called "inspector" throughout the codebase) is integrated into React Native for Android. The inspector provides Chrome DevTools Protocol (CDP) support for debugging JavaScript execution in React Native apps.
 
+## Source Code References
+
+This analysis is based on the React Native codebase found in the following directories relative to the project root:
+
+- **Cross-platform C++ Inspector Core**: `node_modules/react-native/ReactCommon/jsinspector-modern/`
+  - Contains the core inspector implementation shared across all platforms
+  - Key files: `HostTarget.h/cpp`, `InstanceTarget.h/cpp`, `RuntimeTarget.h/cpp`, `InspectorInterfaces.h`, `InspectorPackagerConnection.h`
+
+- **Android-Specific Implementation**: `node_modules/react-native/ReactAndroid/`
+  - Contains Java/Kotlin code and JNI bridges for Android integration
+  - Key directories: `ReactAndroid/src/main/java/com/facebook/react/bridge/`, `ReactAndroid/src/main/java/com/facebook/react/devsupport/`, `ReactAndroid/src/main/jni/react/jni/`
+  - Key files: `Inspector.kt`, `JInspector.cpp`, `ReactInstanceManagerInspectorTarget.kt`, `JReactHostInspectorTarget.cpp`, `CxxInspectorPackagerConnection.kt`
+
+These directories contain the reference implementation that this document analyzes. When implementing modern inspector support for other platforms (like Windows), these files serve as the authoritative examples of correct integration patterns.
+
 ## Core Architecture
 
 ### Key Components
@@ -805,17 +820,23 @@ Based on the Android implementation, React Native for Windows needs:
 
 ### Key Files to Reference
 
-**Android Implementation**:
-- `ReactAndroid/src/main/java/com/facebook/react/bridge/Inspector.kt` - Java wrapper
-- `ReactAndroid/src/main/jni/react/jni/JInspector.cpp` - JNI bridge
-- `ReactAndroid/src/main/java/com/facebook/react/bridge/ReactInstanceManagerInspectorTarget.kt` - Host target wrapper
-- `ReactAndroid/src/main/jni/react/jni/ReactInstanceManagerInspectorTarget.cpp` - Host target implementation
-- `ReactAndroid/src/main/java/com/facebook/react/devsupport/CxxInspectorPackagerConnection.kt` - WebSocket connection
-- `ReactAndroid/src/main/jni/react/devsupport/JCxxInspectorPackagerConnectionDelegateImpl.cpp` - WebSocket delegate
-- `ReactAndroid/src/main/jni/react/jni/CatalystInstanceImpl.cpp` - Bridge initialization
+**Android Implementation** (in `node_modules/react-native/ReactAndroid/`):
+- `src/main/java/com/facebook/react/bridge/Inspector.kt` - Java wrapper
+- `src/main/jni/react/jni/JInspector.cpp` - JNI bridge
+- `src/main/java/com/facebook/react/bridge/ReactInstanceManagerInspectorTarget.kt` - Host target wrapper
+- `src/main/jni/react/jni/ReactInstanceManagerInspectorTarget.cpp` - Host target implementation
+- `src/main/java/com/facebook/react/devsupport/CxxInspectorPackagerConnection.kt` - WebSocket connection
+- `src/main/jni/react/devsupport/JCxxInspectorPackagerConnectionDelegateImpl.cpp` - WebSocket delegate
+- `src/main/jni/react/jni/CatalystInstanceImpl.cpp` - Bridge initialization
 
-**Cross-Platform C++ Core**:
-Same files as listed in iOS documentation.
+**Cross-Platform C++ Core** (in `node_modules/react-native/ReactCommon/`):
+- `jsinspector-modern/InspectorInterfaces.h` - Core interfaces
+- `jsinspector-modern/HostTarget.h/cpp` - HostTarget implementation
+- `jsinspector-modern/InstanceTarget.h/cpp` - InstanceTarget implementation
+- `jsinspector-modern/RuntimeTarget.h/cpp` - RuntimeTarget implementation
+- `jsinspector-modern/InspectorPackagerConnection.h` - Connection protocol
+- `jsinspector-modern/ScopedExecutor.h` - Executor patterns
+- `cxxreact/Instance.cpp` (lines 30-120) - Inspector registration
 
 ### Windows-Specific Considerations
 

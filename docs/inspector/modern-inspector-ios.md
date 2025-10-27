@@ -4,6 +4,21 @@
 
 This document describes how the modern JavaScript debugger (called "inspector" throughout the codebase) is integrated into React Native for iOS. The inspector provides Chrome DevTools Protocol (CDP) support for debugging JavaScript execution in React Native apps.
 
+## Source Code References
+
+This analysis is based on the React Native codebase found in the following directories relative to the project root:
+
+- **Cross-platform C++ Inspector Core**: `node_modules/react-native/ReactCommon/jsinspector-modern/`
+  - Contains the core inspector implementation shared across all platforms
+  - Key files: `HostTarget.h/cpp`, `InstanceTarget.h/cpp`, `RuntimeTarget.h/cpp`, `InspectorInterfaces.h`, `InspectorPackagerConnection.h`
+
+- **iOS-Specific Implementation**: `node_modules/react-native/React/`
+  - Contains Objective-C++/Swift wrappers and iOS-specific integration code
+  - Key directories: `React/Inspector/`, `React/Base/`, `React/CxxBridge/`
+  - Key files: `RCTInspector.mm`, `RCTCxxInspectorPackagerConnection.mm`, `RCTBridge.mm`, `RCTCxxBridge.mm`
+
+These directories contain the reference implementation that this document analyzes. When implementing modern inspector support for other platforms (like Windows), these files serve as the authoritative examples of correct integration patterns.
+
 ## Core Architecture
 
 ### Key Components
@@ -477,22 +492,22 @@ To integrate the modern inspector into React Native for Windows, you need to:
 
 ### Key Files to Reference
 
-**iOS Implementation**:
-- `React/Inspector/RCTInspector.mm` - Basic wrapper pattern
-- `React/Inspector/RCTCxxInspectorPackagerConnection.mm` - Connection management
-- `React/Inspector/RCTCxxInspectorPackagerConnectionDelegate.mm` - Platform delegation
-- `React/Inspector/RCTCxxInspectorWebSocketAdapter.mm` - WebSocket adaptation
-- `React/Base/RCTBridge.mm` (lines 265-340, 390-430, 560-600) - HostTarget integration
-- `React/CxxBridge/RCTCxxBridge.mm` (lines 430-530, 700-750) - Instance initialization
+**iOS Implementation** (in `node_modules/react-native/React/`):
+- `Inspector/RCTInspector.mm` - Basic wrapper pattern
+- `Inspector/RCTCxxInspectorPackagerConnection.mm` - Connection management
+- `Inspector/RCTCxxInspectorPackagerConnectionDelegate.mm` - Platform delegation
+- `Inspector/RCTCxxInspectorWebSocketAdapter.mm` - WebSocket adaptation
+- `Base/RCTBridge.mm` (lines 265-340, 390-430, 560-600) - HostTarget integration
+- `CxxBridge/RCTCxxBridge.mm` (lines 430-530, 700-750) - Instance initialization
 
-**Cross-Platform C++ Core**:
-- `ReactCommon/jsinspector-modern/InspectorInterfaces.h` - Core interfaces
-- `ReactCommon/jsinspector-modern/HostTarget.h/cpp` - HostTarget implementation
-- `ReactCommon/jsinspector-modern/InstanceTarget.h/cpp` - InstanceTarget implementation
-- `ReactCommon/jsinspector-modern/RuntimeTarget.h/cpp` - RuntimeTarget implementation
-- `ReactCommon/jsinspector-modern/InspectorPackagerConnection.h` - Connection protocol
-- `ReactCommon/jsinspector-modern/ScopedExecutor.h` - Executor patterns
-- `ReactCommon/cxxreact/Instance.cpp` (lines 30-120) - Inspector registration
+**Cross-Platform C++ Core** (in `node_modules/react-native/ReactCommon/`):
+- `jsinspector-modern/InspectorInterfaces.h` - Core interfaces
+- `jsinspector-modern/HostTarget.h/cpp` - HostTarget implementation
+- `jsinspector-modern/InstanceTarget.h/cpp` - InstanceTarget implementation
+- `jsinspector-modern/RuntimeTarget.h/cpp` - RuntimeTarget implementation
+- `jsinspector-modern/InspectorPackagerConnection.h` - Connection protocol
+- `jsinspector-modern/ScopedExecutor.h` - Executor patterns
+- `cxxreact/Instance.cpp` (lines 30-120) - Inspector registration
 
 ### Testing Strategy
 
