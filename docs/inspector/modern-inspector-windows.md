@@ -878,29 +878,260 @@ JS Thread
 - TurboModule invocations
 ```
 
+## Multi-Instance Architecture Analysis
+
+### DevSupportManager - Shared Singleton Pattern
+
+**Question**: Is `DevSupportManager` a singleton per application?
+
+**Answer**: **YES**. The implementation confirms this:
+
+```cpp
+// From vnext/Shared/InstanceManager.cpp
+const std::shared_ptr<facebook::react::IDevSupportManager> &GetSharedDevManager() noexcept {
+  static std::shared_ptr<facebook::react::IDevSupportManager> s_devManager(
+      facebook::react::CreateDevSupportManager());
+  return s_devManager;
+}
+```
+
+This creates a **single shared instance** per process that is reused by all React instances. This matches the pattern where:
+- Multiple `ReactNativeHost` instances can exist
+- All share the same `DevSupportManager`
+- The `DevSupportManager` contains the singleton `InspectorPackagerConnection`
+- Only **one WebSocket connection** to Metro exists per app
+
+### Inspector Architecture for Multiple Instances
+
+The correct architecture for supporting multiple React instances is:
+
+```
+Metro Packager (Single)
+    ↓ (Single WebSocket)
+InspectorPackagerConnection (Singleton in DevSupportManager)
+    ↓ (Communicates with)
+IInspector Global Singleton (getInspectorInstance())
+    ↓ (Manages multiple pages)
+    ├─ Page 1: HostTarget #1 → ReactNativeHost #1 → React Instance #1
+    ├─ Page 2: HostTarget #2 → ReactNativeHost #2 → React Instance #2
+    └─ Page N: HostTarget #N → ReactNativeHost #N → React Instance #N
+```
+
+**Key Insight**: This architecture matches iOS and Android:
+
+**iOS**:
+- Multiple `RCTBridge` instances each create their own `HostTarget`
+- All register with global `getInspectorInstance()`
+- Typically one `InspectorPackagerConnection` per app (though technically per bridge, only one is active)
+- Metro sees multiple pages from the same app
+
+**Android**:
+- Multiple `ReactInstanceManager` instances each create their own `ReactInstanceManagerInspectorTarget`
+- All register with global `getInspectorInstance()`
+- Single `InspectorPackagerConnection` per app
+- Metro sees multiple pages from the same app
+
+**Windows (Current)**:
+- Multiple `ReactNativeHost` instances each create their own `HostTarget`
+- All register with global `getInspectorInstance()`
+- Single `InspectorPackagerConnection` in shared `DevSupportManager`
+- Metro sees multiple pages from the same app
+
+### Recommendation: HostTarget Association
+
+**Question**: Should the inspector `HostTarget` be associated with `ReactNativeHost` or `DevSupportManager`?
+
+**Answer**: **`HostTarget` should remain with `ReactNativeHost`** (current design is correct).
+
+**Rationale**:
+
+1. **One HostTarget per React Instance**: Each React instance needs its own `HostTarget` to represent it in the debugger. The `HostTarget` manages the instance and runtime registration.
+
+2. **DevSupportManager is Shared Infrastructure**: The `DevSupportManager` provides **shared services** across all instances:
+   - WebSocket connection (`InspectorPackagerConnection`)
+   - Bundle downloading
+   - Live reload coordination
+   - But it doesn't represent any specific instance
+
+3. **Matches iOS/Android Pattern**: 
+   - iOS: Each `RCTBridge` owns its `HostTarget`
+   - Android: Each `ReactInstanceManager` owns its `ReactInstanceManagerInspectorTarget`
+   - Windows: Each `ReactNativeHost` owns its `HostTarget`
+
+4. **Delegate Lifecycle**: The `HostTargetDelegate` needs access to instance-specific operations:
+   - `onReload()` → Should reload the specific `ReactNativeHost`
+   - `onSetPausedInDebuggerMessage()` → Should show overlay for the specific instance
+   - `getMetadata()` → Should return metadata for the specific instance
+
+5. **Multiple Pages in Debugger**: When you open Chrome DevTools and navigate to `chrome://inspect`, you should see **multiple pages** if you have multiple `ReactNativeHost` instances. Each page represents one instance and can be debugged independently.
+
+**Current Implementation is Correct**:
+```cpp
+// Each ReactNativeHost creates its own HostTarget
+ReactNativeHost::ReactNativeHost() {
+  m_inspectorHostDelegate = std::make_shared<ModernInspectorHostTargetDelegate>(*this);
+  m_inspectorTarget = HostTarget::create(*m_inspectorHostDelegate, executor);
+  m_inspectorPageId = getInspectorInstance().addPage(...);
+}
+```
+
+**DevSupportManager's Role**:
+```cpp
+// DevSupportManager creates the shared PackagerConnection
+void DevSupportManager::EnsureHermesInspector(...) {
+  if (!m_fuseboxInspectorPackagerConnection) {
+    m_fuseboxInspectorPackagerConnection = 
+        std::make_unique<InspectorPackagerConnection>(
+            getInspectorInstance(),  // Global inspector with all pages
+            "React Native Windows",
+            delegate);
+  }
+}
+```
+
+### ReactInspectorThread - Singleton vs Per-Instance
+
+**Question**: Should `ReactInspectorThread` be a singleton or per-`ReactNativeHost` dispatcher queue?
+
+**Answer**: **Singleton is the correct design** for Windows, but with an important consideration.
+
+**Analysis**:
+
+#### Current Implementation
+```cpp
+// vnext/Shared/Inspector/ReactInspectorThread.h
+class ReactInspectorThread {
+ public:
+  static Mso::DispatchQueue &Instance() {
+    static Mso::DispatchQueue queue = Mso::DispatchQueue::MakeSerialQueue();
+    return queue;
+  }
+};
+```
+
+This creates a **single serial dispatch queue** for all inspector operations across all `ReactNativeHost` instances.
+
+#### Comparison with iOS/Android
+
+| Platform | Inspector Thread | Notes |
+|----------|------------------|-------|
+| **iOS** | Main Queue (UI Thread) | All `RCTBridge` instances share the main queue for `HostTarget` operations |
+| **Android** | UI Thread | All `ReactInstanceManager` instances share the UI thread for `HostTarget` operations |
+| **Windows** | ReactInspectorThread (Singleton) | All `ReactNativeHost` instances share a dedicated serial queue |
+
+#### Why Singleton is Correct
+
+1. **Matches iOS/Android Pattern**: Both platforms use a **shared thread** (main/UI) for all inspector operations across multiple instances.
+
+2. **InspectorPackagerConnection is Singleton**: Since there's one WebSocket connection handling messages for all pages, it makes sense that all `HostTarget` executors use the same thread for consistency.
+
+3. **Thread Safety**: The global `IInspector` and `InspectorPackagerConnection` are designed to be thread-safe and coordinate multiple pages. Using a single executor thread simplifies synchronization.
+
+4. **Simpler Mental Model**: All inspector callbacks (`onReload`, `onSetPausedInDebuggerMessage`) run on the same thread, making reasoning about execution order straightforward.
+
+5. **Cross-Instance Coordination**: Operations that affect multiple instances (like Metro sending reload signal) can be coordinated on a single thread.
+
+#### Important Consideration: UI Operations
+
+There is one critical issue with the current implementation: **UI operations may not work correctly**.
+
+The `HostTargetDelegate::onSetPausedInDebuggerMessage()` needs to show a "Paused in Debugger" overlay:
+
+```cpp
+void onSetPausedInDebuggerMessage(...) {
+  DebuggerNotifications::OnShowDebuggerPausedOverlay(
+      instanceSettings.Notifications(), 
+      request.message.value(), 
+      onResume);
+}
+```
+
+Looking at the notification system:
+```cpp
+static void OnShowDebuggerPausedOverlay(
+    IReactNotificationService const &service,
+    std::string message,
+    std::function<void()> onResume) {
+  service.SendNotification(ShowDebuggerPausedOverlayEventName(), nullptr, nonAbiValue);
+}
+```
+
+The notification system handles threading internally via the `IReactDispatcher` that subscribers provide:
+
+```cpp
+static IReactNotificationSubscription SubscribeShowDebuggerPausedOverlay(
+    IReactNotificationService const &service,
+    IReactDispatcher const &dispatcher,  // ← Subscriber provides dispatcher
+    std::function<void(std::string, std::function<void()>)> showCallback,
+    std::function<void()> hideCallback) {
+  return service.Subscribe(
+      ShowDebuggerPausedOverlayEventName(),
+      dispatcher,  // ← Callback runs on this dispatcher
+      callback);
+}
+```
+
+**This is perfect!** The notification pattern means:
+- Inspector delegate calls notification on ReactInspectorThread
+- Notification service delivers to subscribers on their own dispatcher (typically UI dispatcher)
+- UI components can safely update on UI thread
+
+**Verdict**: The current singleton `ReactInspectorThread` design is **correct and optimal**.
+
+#### Alternative Considered: Per-Instance Queue
+
+Using a per-`ReactNativeHost` dispatcher queue would:
+- ❌ Add unnecessary complexity
+- ❌ Break the shared `InspectorPackagerConnection` model
+- ❌ Make cross-instance coordination harder
+- ❌ Diverge from iOS/Android patterns
+- ❌ Provide no real benefits
+
+The only potential benefit (thread isolation per instance) is not needed because:
+- `HostTarget` operations are lightweight
+- The notification system handles UI threading
+- Multiple instances naturally coordinate through the global `IInspector`
+
+### Architectural Recommendations
+
+Based on this analysis, the **current architecture is fundamentally sound**:
+
+1. ✅ **Keep HostTarget per ReactNativeHost** - Correctly represents each instance
+2. ✅ **Keep DevSupportManager as singleton** - Correctly provides shared services
+3. ✅ **Keep ReactInspectorThread as singleton** - Correctly matches iOS/Android pattern
+4. ✅ **Keep InspectorPackagerConnection in DevSupportManager** - Correctly shares one WebSocket
+
+The main work needed is:
+- Remove the Fusebox experimental flag
+- Verify multi-instance debugging works correctly
+- Add tests for multiple `ReactNativeHost` scenarios
+- Ensure proper cleanup when instances are destroyed
+
 ## Conclusion
 
 React Native for Windows has a solid foundation for modern inspector integration that closely follows the iOS and Android patterns. The key components are in place:
 
-✅ **HostTarget creation and management**
-✅ **HostTargetDelegate implementation**  
-✅ **Inspector thread abstraction**
-✅ **WebSocket adapter**
+✅ **HostTarget creation and management** (per `ReactNativeHost`)
+✅ **HostTargetDelegate implementation** (per instance)
+✅ **Inspector thread abstraction** (singleton, matches iOS/Android)
+✅ **WebSocket adapter** (singleton via `DevSupportManager`)
 ✅ **Bridgeless architecture support**
+✅ **Multi-instance architecture** (matches iOS/Android)
 
 However, several areas need attention to achieve feature parity with iOS/Android:
 
 ⚠️ **Remove experimental flag** (Fusebox gate)
 ⚠️ **Add bridge-based architecture support**
 ⚠️ **Verify synchronous initialization**
+⚠️ **Test multi-instance scenarios**
 ⚠️ **Improve thread safety in cleanup**
-⚠️ **Clarify DevSupportManager integration**
 
 The architecture is well-designed with clean separation between:
-- **ReactNativeHost**: Public API and instance management
-- **ReactHost**: Internal lifecycle and threading
-- **ReactInstanceWin**: Platform-specific implementation
-- **DevSupportManager**: Development services
-- **ReactInspectorThread**: Inspector operations
+- **ReactNativeHost**: Public API and per-instance management (owns `HostTarget`)
+- **ReactHost**: Internal lifecycle and threading (per instance)
+- **ReactInstanceWin**: Platform-specific implementation (per instance)
+- **DevSupportManager**: Shared development services (singleton)
+- **ReactInspectorThread**: Shared inspector operations (singleton)
+- **InspectorPackagerConnection**: Shared Metro communication (singleton)
 
 By following the recommendations above and conducting thorough testing, React Native for Windows can achieve full modern inspector support equivalent to iOS and Android platforms.
