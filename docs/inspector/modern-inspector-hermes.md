@@ -4,6 +4,518 @@
 
 This document describes the interaction between the React Native modern inspector and the Hermes JavaScript engine. Understanding this integration is crucial for creating an ABI-stable API layer for Hermes on Windows, where direct access to Hermes C++ APIs is not possible.
 
+## Table of Contents
+
+1. [Core Concepts](#core-concepts)
+2. [RuntimeTarget and RuntimeAgent Lifecycle](#runtimetarget-and-runtimeagent-lifecycle)
+3. [FrontendChannel Architecture](#frontendchannel-architecture)
+4. [Terminology: "Debugger" vs "Inspector"](#terminology-debugger-vs-inspector)
+5. [Architecture Overview](#architecture-overview)
+6. [Core Components](#core-components)
+7. [Implementation Details](#implementation-details)
+
+## Core Concepts
+
+### RuntimeTarget vs RuntimeAgent
+
+These are two **distinct** components with different lifetimes and purposes:
+
+#### RuntimeTarget
+
+**What it is**: Represents a **JavaScript runtime instance** (e.g., one Hermes VM).
+
+**Lifetime**: 
+- Created when JS runtime is initialized
+- Lives as long as the JS runtime exists
+- Destroyed when runtime is torn down (e.g., on reload)
+
+**Ownership**: 
+- Owned by `InstanceTarget` (via `std::shared_ptr`)
+- One per React instance's JS runtime
+
+**Key Responsibilities**:
+- Install console handler in JS global scope
+- Manage runtime-level debugging infrastructure
+- Create `RuntimeAgent` instances for each debug session
+- Notify agents when debugging sessions start/stop
+
+#### RuntimeAgent
+
+**What it is**: Represents a **debugging session** for a runtime.
+
+**Lifetime**:
+- Created when Chrome DevTools connects
+- Lives as long as the debug session is active
+- Destroyed when session disconnects
+- **Multiple agents can exist** for the same `RuntimeTarget` (multiple debugger connections)
+
+**Ownership**:
+- Created by `RuntimeTarget::createAgent()`
+- Owned by the session (via `std::shared_ptr`)
+- Tracked by `RuntimeTarget` in a `WeakList<RuntimeAgent>`
+
+**Key Responsibilities**:
+- Handle CDP requests for a specific session
+- Maintain session state (breakpoints, etc.)
+- Communicate with frontend via `FrontendChannel`
+- Delegate engine-specific work to `RuntimeAgentDelegate`
+
+### Lifetime Relationship
+
+```
+ReactNativeHost (Windows-specific lifetime)
+    ↓
+ReactInstance (bridgeless) or Instance (bridge-based)
+    ↓ creates/destroys on each reload
+HermesRuntimeHolder (Windows-specific - recreated on reload)
+    ↓ owns
+HermesRuntime (jsi::Runtime - recreated on reload)
+    ↓ 
+HermesRuntimeTargetDelegate (recreated on reload)
+    ↓ passed to
+RuntimeTarget (recreated on reload)
+    ↓ creates for each session
+RuntimeAgent (session 1), RuntimeAgent (session 2), ...
+    ↓ creates
+HermesRuntimeAgentDelegate (session-specific)
+```
+
+**Key Insight**: When RNH reloads:
+1. ✅ `ReactNativeHost` **survives** the reload
+2. ❌ `HermesRuntimeHolder` is **destroyed and recreated**
+3. ❌ `HermesRuntime` is **destroyed and recreated**
+4. ❌ `HermesRuntimeTargetDelegate` is **destroyed and recreated**
+5. ❌ `RuntimeTarget` is **destroyed and recreated**
+6. ❌ `RuntimeAgent` instances are **destroyed and recreated** (sessions reconnect)
+
+### Expected Lifetime Behavior
+
+From iOS/Android implementation analysis:
+
+```cpp
+// In ReactInstance.cpp (cross-platform bridgeless)
+void ReactInstance::initializeRuntime(...) {
+  // Runtime created here
+  
+  if (parentInspectorTarget_) {
+    parentInspectorTarget_->execute([this, ...](HostTarget& hostTarget) {
+      // Register InstanceTarget (survives reloads)
+      inspectorTarget_ = &hostTarget.registerInstance(*this);
+      
+      // Register RuntimeTarget (RECREATED on each reload)
+      runtimeInspectorTarget_ = &inspectorTarget_->registerRuntime(
+          runtime_->getRuntimeTargetDelegate(),  // HermesRuntimeTargetDelegate
+          runtimeExecutor);
+    });
+  }
+}
+
+void ReactInstance::unregisterFromInspector() {
+  if (inspectorTarget_) {
+    // Unregister RuntimeTarget BEFORE destroying runtime
+    inspectorTarget_->unregisterRuntime(*runtimeInspectorTarget_);
+    
+    // InstanceTarget remains registered (survives reload)
+    // Only unregistered when ReactNativeHost is destroyed
+  }
+}
+```
+
+### Windows RNH Reload Sequence
+
+**Current Windows behavior** (from your description):
+
+1. **Reload triggered**
+2. `HermesRuntimeHolder` destroyed
+3. `HermesRuntime` destroyed
+4. **Problem**: `RuntimeTarget` may still exist, holding reference to destroyed runtime
+5. New `HermesRuntimeHolder` created
+6. New `HermesRuntime` created
+7. New `RuntimeTarget` should be created
+
+**Correct sequence** (should match iOS/Android):
+
+1. **Before destroying runtime**:
+   ```cpp
+   // In ReactInstanceWin::Uninitialize() or similar
+   if (m_inspectorTarget && m_runtimeInspectorTarget) {
+     m_inspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
+     m_runtimeInspectorTarget = nullptr;
+   }
+   ```
+
+2. **Destroy old runtime**:
+   ```cpp
+   m_hermesRuntimeHolder.reset();  // Destroys Hermes runtime
+   ```
+
+3. **Create new runtime**:
+   ```cpp
+   m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
+   ```
+
+4. **Register new runtime**:
+   ```cpp
+   if (m_inspectorTarget) {
+     auto& newRuntimeTarget = m_inspectorTarget->registerRuntime(
+         m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
+         runtimeExecutor);
+     m_runtimeInspectorTarget = &newRuntimeTarget;
+   }
+   ```
+
+### Critical Constraint from React Native
+
+From `RuntimeTarget.cpp`:
+
+```cpp
+RuntimeTarget::~RuntimeTarget() {
+  // Agents are owned by the session, not by RuntimeTarget, but
+  // they hold a RuntimeTarget& that we must guarantee is valid.
+  assert(
+      agents_.empty() &&
+      "RuntimeAgent objects must be destroyed before their RuntimeTarget. "
+      "Did you call InstanceTarget::unregisterRuntime()?");
+}
+```
+
+**This means**: 
+- ✅ You **MUST** call `unregisterRuntime()` before destroying the JS runtime
+- ✅ This gives sessions a chance to disconnect gracefully
+- ✅ `RuntimeAgent` instances will be destroyed before `RuntimeTarget`
+- ❌ **Never** destroy the runtime while `RuntimeTarget` still exists
+
+### Windows HermesRuntimeHolder Integration
+
+**Current challenge**: `HermesRuntimeHolder` is recreated on reload, but `RuntimeTarget` needs careful coordination.
+
+**Recommended pattern**:
+
+```cpp
+class HermesRuntimeHolder {
+ public:
+  HermesRuntimeHolder(...) {
+    // Create Hermes runtime
+    m_hermesRuntime = makeHermesRuntime(...);
+    
+    // Create runtime target delegate
+    m_runtimeTargetDelegate = std::make_shared<HermesRuntimeTargetDelegate>(
+        m_hermesRuntime);
+  }
+  
+  ~HermesRuntimeHolder() {
+    // RuntimeTarget will be unregistered by ReactInstanceWin BEFORE
+    // HermesRuntimeHolder is destroyed
+    
+    // Destroy in reverse order
+    m_runtimeTargetDelegate.reset();
+    m_hermesRuntime.reset();
+  }
+  
+  HermesRuntimeTargetDelegate& getRuntimeTargetDelegate() {
+    return *m_runtimeTargetDelegate;
+  }
+  
+ private:
+  std::shared_ptr<jsi::Runtime> m_hermesRuntime;
+  std::shared_ptr<HermesRuntimeTargetDelegate> m_runtimeTargetDelegate;
+};
+```
+
+**In ReactInstanceWin**:
+
+```cpp
+class ReactInstanceWin {
+ public:
+  void Initialize() {
+    // Create runtime holder
+    m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
+    
+    // Register with inspector
+    if (m_instanceInspectorTarget) {
+      m_runtimeInspectorTarget = &m_instanceInspectorTarget->registerRuntime(
+          m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
+          m_runtimeExecutor);
+    }
+  }
+  
+  void Reload() {
+    // CRITICAL: Unregister BEFORE destroying runtime
+    if (m_instanceInspectorTarget && m_runtimeInspectorTarget) {
+      m_instanceInspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
+      m_runtimeInspectorTarget = nullptr;
+    }
+    
+    // Now safe to destroy old runtime
+    m_hermesRuntimeHolder.reset();
+    
+    // Create new runtime
+    m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
+    
+    // Register new runtime
+    if (m_instanceInspectorTarget) {
+      m_runtimeInspectorTarget = &m_instanceInspectorTarget->registerRuntime(
+          m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
+          m_runtimeExecutor);
+    }
+  }
+  
+  ~ReactInstanceWin() {
+    // Unregister runtime before destruction
+    if (m_instanceInspectorTarget && m_runtimeInspectorTarget) {
+      m_instanceInspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
+    }
+    
+    // Now safe to destroy
+    m_hermesRuntimeHolder.reset();
+  }
+  
+ private:
+  std::shared_ptr<HermesRuntimeHolder> m_hermesRuntimeHolder;
+  InstanceTarget* m_instanceInspectorTarget{nullptr};  // Not owned
+  RuntimeTarget* m_runtimeInspectorTarget{nullptr};    // Not owned
+};
+```
+
+### Summary: Lifetime Expectations
+
+| Component | Lifetime Scope | Recreated on Reload? | Owner |
+|-----------|---------------|---------------------|--------|
+| **ReactNativeHost** | Application lifetime | ❌ No | Application |
+| **HostTarget** | ReactNativeHost lifetime | ❌ No | ReactNativeHost |
+| **InstanceTarget** | ReactNativeHost lifetime | ❌ No | HostTarget |
+| **ReactInstance** | Per-load (reload cycles) | ✅ Yes | ReactNativeHost |
+| **HermesRuntimeHolder** | Per-load (reload cycles) | ✅ Yes | ReactInstance |
+| **HermesRuntime** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder |
+| **HermesRuntimeTargetDelegate** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder |
+| **RuntimeTarget** | Per-load (reload cycles) | ✅ Yes | InstanceTarget |
+| **RuntimeAgent** | Per debug session | ✅ Yes (session reconnects) | Session |
+| **HermesRuntimeAgentDelegate** | Per debug session | ✅ Yes (session reconnects) | RuntimeAgent |
+
+**Key Principle**: 
+- Components that wrap the JS runtime (`HermesRuntimeHolder`, `RuntimeTarget`, delegates) are **recreated on each reload**
+- Components that represent the host/instance level survive reloads
+- Proper `unregisterRuntime()` call is **mandatory** before destroying the runtime
+
+## FrontendChannel Architecture
+
+### What is FrontendChannel?
+
+`FrontendChannel` is a **callback function** used to send CDP messages (responses and events) from the inspector back to the debugging frontend (Chrome DevTools, VS Code, etc.).
+
+**Type Signature**:
+```cpp
+namespace facebook::react::jsinspector_modern {
+
+/**
+ * A callback that can be used to send debugger messages (method responses and
+ * events) to the frontend. The message must be a JSON-encoded string.
+ * The callback may be called from any thread.
+ */
+using FrontendChannel = std::function<void(std::string_view messageJson)>;
+
+} // namespace facebook::react::jsinspector_modern
+```
+
+### FrontendChannel vs ReactInspectorThread
+
+**Question**: Is `FrontendChannel` the same as the `ReactInspectorThread` singleton dispatcher?
+
+**Answer**: **No, they are different concepts with different purposes.**
+
+#### FrontendChannel
+
+- **Purpose**: Send CDP messages **from inspector → frontend**
+- **Direction**: Outbound messages (responses/events)
+- **Type**: `std::function<void(std::string_view)>` callback
+- **Threading**: Can be called from **any thread** (thread-safe)
+- **Lifetime**: Per debug session (each `RuntimeAgent` gets its own)
+- **Implementation**: Wraps WebSocket send or other transport
+
+#### ReactInspectorThread (Windows-specific)
+
+- **Purpose**: Serialize inspector **control operations**
+- **Direction**: Internal inspector coordination
+- **Type**: `Mso::DispatchQueue` singleton
+- **Threading**: Single serial queue for **all** inspector instances
+- **Lifetime**: Process-wide singleton
+- **Implementation**: Windows-specific executor for `HostTarget::create()`, etc.
+
+### How FrontendChannel Works
+
+```
+Chrome DevTools
+    ↑ (WebSocket)
+    | FrontendChannel sends CDP messages here
+InspectorPackagerConnection (Metro) or Direct CDP Server
+    ↑ (FrontendChannel callback)
+HostTarget Session
+    ↑ (Creates FrontendChannel)
+InstanceAgent
+    ↑ (Forwards FrontendChannel)
+RuntimeAgent
+    ↑ (Forwards FrontendChannel)
+HermesRuntimeAgentDelegate
+    ↑ (Forwards FrontendChannel)
+Hermes CDPAgent
+    | Calls FrontendChannel("{ \"id\": 1, \"result\": {...} }")
+    ↓
+Frontend receives CDP message
+```
+
+### FrontendChannel Creation Flow
+
+1. **Session connects** (Chrome DevTools → Metro/DirectDebugger → HostTarget)
+
+2. **HostTarget creates session with FrontendChannel**:
+   ```cpp
+   // In HostTarget.cpp
+   class HostTargetSession {
+    public:
+     explicit HostTargetSession(
+         std::unique_ptr<IRemoteConnection> remote,
+         ...) 
+         : remote_(std::make_shared<RAIIRemoteConnection>(std::move(remote))),
+           frontendChannel_(
+               // Create FrontendChannel that sends via WebSocket
+               [remoteWeak = std::weak_ptr(remote_)](std::string_view message) {
+                 if (auto remote = remoteWeak.lock()) {
+                   remote->onMessage(std::string(message));  // Send to frontend
+                 }
+               }),
+           hostAgent_(frontendChannel_, ...) {}  // Pass to HostAgent
+   };
+   ```
+
+3. **HostAgent forwards to InstanceAgent**:
+   ```cpp
+   auto instanceAgent = std::make_shared<InstanceAgent>(
+       frontendChannel_,  // Same channel
+       ...);
+   ```
+
+4. **InstanceAgent forwards to RuntimeAgent**:
+   ```cpp
+   auto runtimeAgent = std::make_shared<RuntimeAgent>(
+       channel,  // Same channel
+       ...);
+   ```
+
+5. **RuntimeAgent creates RuntimeAgentDelegate** (e.g., HermesRuntimeAgentDelegate):
+   ```cpp
+   delegate_.createAgentDelegate(
+       channel,  // Same channel
+       sessionState,
+       ...);
+   ```
+
+6. **HermesRuntimeAgentDelegate creates Hermes CDPAgent**:
+   ```cpp
+   hermes_ = hermes::cdp::CDPAgent::create(
+       executionContextID,
+       cdpDebugAPI,
+       runtimeTaskCallback,
+       frontendChannel,  // Hermes will call this to send messages
+       previousState);
+   ```
+
+### FrontendChannel Thread Safety
+
+**Key Property**: `FrontendChannel` can be called from **any thread**.
+
+**Why**: 
+- Hermes CDPAgent may send messages from JS thread
+- Some CDP events are triggered from background threads
+- The transport (WebSocket) handles thread synchronization
+
+**Example in InspectorPackagerConnection**:
+```cpp
+// InspectorPackagerConnection.cpp
+class RemoteConnection : public IRemoteConnection {
+  void onMessage(std::string message) override {
+    // This may be called from ANY thread
+    // InspectorPackagerConnection handles synchronization
+    webSocket_->send(message);
+  }
+};
+```
+
+### FrontendChannel in Windows Integration
+
+**Your Windows implementation** should:
+
+1. **Create FrontendChannel in session**:
+   ```cpp
+   // When session connects
+   auto frontendChannel = [weakWebSocket = std::weak_ptr(webSocket_)](
+       std::string_view messageJson) {
+     if (auto ws = weakWebSocket.lock()) {
+       ws->send(std::string(messageJson));  // Send to Metro or Chrome
+     }
+   };
+   ```
+
+2. **Pass to HermesRuntimeAgentDelegate**:
+   ```cpp
+   auto hermesAgentDelegate = std::make_unique<HermesRuntimeAgentDelegate>(
+       frontendChannel,  // Hermes will use this to respond
+       sessionState,
+       previousState,
+       executionContextDescription,
+       hermesRuntime,
+       runtimeTargetDelegate,
+       runtimeExecutor);
+   ```
+
+3. **Hermes calls it to send CDP messages**:
+   ```cpp
+   // Inside Hermes CDPAgent
+   frontendChannel(R"({"id": 1, "result": {"breakpointId": "1:10:0"}})");
+   ```
+
+### Relationship to ReactInspectorThread
+
+**ReactInspectorThread** is used for:
+- ✅ `HostTarget::create()` executor parameter
+- ✅ Serializing inspector infrastructure operations
+- ✅ Ensuring inspector control flow is single-threaded
+
+**FrontendChannel** is used for:
+- ✅ Sending CDP messages to frontend
+- ✅ Per-session communication
+- ✅ Can be called from any thread
+
+**They are complementary**, not the same:
+
+```cpp
+// ReactInspectorThread: For inspector infrastructure
+auto inspectorThread = ReactInspectorThread::Instance();
+m_inspectorTarget = HostTarget::create(
+    *m_inspectorHostDelegate,
+    [](std::function<void()>&& callback) {
+      // Use ReactInspectorThread for control operations
+      ReactInspectorThread::Instance().Post(std::move(callback));
+    });
+
+// FrontendChannel: For sending CDP messages to Chrome
+auto frontendChannel = [webSocket](std::string_view msg) {
+  webSocket->send(std::string(msg));  // To frontend
+};
+auto runtimeAgent = runtimeTarget.createAgent(frontendChannel, sessionState);
+```
+
+### Summary: FrontendChannel vs ReactInspectorThread
+
+| Aspect | FrontendChannel | ReactInspectorThread |
+|--------|----------------|---------------------|
+| **Purpose** | Send CDP messages to frontend | Serialize inspector operations |
+| **Direction** | Outbound (inspector → frontend) | Internal (infrastructure coordination) |
+| **Lifetime** | Per session | Process singleton |
+| **Threading** | Can be called from any thread | Single serial queue |
+| **Usage** | Communication with debugger | Inspector infrastructure setup |
+| **Type** | `std::function<void(std::string_view)>` | `Mso::DispatchQueue` |
+| **Example** | `frontendChannel("{\"result\": {}}")` | `inspectorThread.Post([]() { ... })` |
+
 ## Terminology: "Debugger" vs "Inspector"
 
 **Question**: What is the difference between "debugger" and "inspector"?
