@@ -878,7 +878,351 @@ JS Thread
 - TurboModule invocations
 ```
 
-## Multi-Instance Architecture Analysis
+## Design Decisions and Best Practices
+
+### Q1: Should ReactInspectorThread be exposed from DevSupportManager?
+
+**Answer**: **No, keep them separate** (current design is correct).
+
+**Rationale**:
+
+1. **Different Concerns**: 
+   - `ReactInspectorThread` is infrastructure for running inspector callbacks
+   - `DevSupportManager` provides development services (bundles, live reload, WebSocket)
+   - These are orthogonal concerns that don't need tight coupling
+
+2. **iOS/Android Don't Have This Pattern**:
+   - **iOS**: Uses system main queue directly via `RCTExecuteOnMainQueue()`
+   - **Android**: Uses system UI thread directly via `UiThreadUtil.runOnUiThread()`
+   - Neither platform has a "DevSupportManager owns inspector thread" pattern
+
+3. **Multiple Usage Contexts**:
+   - `ReactInspectorThread` is used by:
+     - `ReactNativeHost` for `HostTarget` executor
+     - `ReactInspectorPackagerConnectionDelegate` for WebSocket callbacks
+     - Potentially other inspector-related code
+   - Making it accessible via `DevSupportManager` would create an unnecessary dependency chain
+
+4. **Cleaner Architecture**:
+   ```cpp
+   // Current (Good): Direct access to singleton
+   ReactInspectorThread::Instance().Post(callback);
+   
+   // Alternative (Worse): Indirect access through DevSupportManager
+   GetSharedDevManager()->GetInspectorThread().Post(callback);
+   ```
+
+5. **Singleton is the Right Pattern**: Since both are singletons, there's no ownership relationship - they're peers, not parent-child.
+
+**Recommendation**: Keep `ReactInspectorThread` as a standalone singleton accessible directly. This matches the platform pattern where the inspector thread is a system-provided resource (main/UI thread), not something owned by dev support.
+
+### Q2: When Should We Register Debugger Pages?
+
+**Answer**: **Register in constructor, NOT before LoadInstance** (current design is correct).
+
+**Analysis of iOS Pattern**:
+
+```objc++
+// From node_modules/react-native/React/Base/RCTBridge.mm
+
+- (instancetype)initWithDelegate:(id<RCTBridgeDelegate>)delegate
+                       bundleURL:(NSURL *)bundleURL
+                  moduleProvider:(RCTBridgeModuleListProvider)block
+                   launchOptions:(NSDictionary *)launchOptions {
+  if (self = [super init]) {
+    _inspectorHostDelegate = std::make_unique<RCTBridgeHostTargetDelegate>(self);
+    [self setUp];  // ← Inspector page registered HERE in setUp
+  }
+  return self;
+}
+
+- (void)setUp {
+  // ... performance logger setup ...
+  
+  // Register inspector page BEFORE loading any JavaScript
+  if (inspectorFlags.getFuseboxEnabled() && !_inspectorPageId.has_value()) {
+    _inspectorTarget = HostTarget::create(*_inspectorHostDelegate, executor);
+    _inspectorPageId = getInspectorInstance().addPage(
+        "React Native Bridge",
+        /* vm */ "",
+        connectCallback,
+        capabilities);
+  }
+  
+  // ... then create and start the bridge ...
+}
+```
+
+**Analysis of Android Pattern**:
+
+```cpp
+// From node_modules/react-native/ReactAndroid/.../ReactInstanceManagerInspectorTarget.cpp
+
+ReactInstanceManagerInspectorTarget::ReactInstanceManagerInspectorTarget(
+    jni::alias_ref<jhybridobject> jobj,
+    jni::alias_ref<JExecutor::javaobject> javaExecutor,
+    jni::alias_ref<TargetDelegate> delegate) {
+  
+  // Register inspector page in CONSTRUCTOR
+  if (inspectorFlags.getFuseboxEnabled()) {
+    inspectorTarget_ = HostTarget::create(*this, inspectorExecutor_);
+    
+    inspectorPageId_ = getInspectorInstance().addPage(
+        "React Native Bridge",
+        /* vm */ "",
+        connectCallback,
+        capabilities);
+  }
+}
+```
+
+**Key Insights**:
+
+1. **Early Registration**: Both iOS and Android register the page **as soon as the host object is created**, not when instance loads
+2. **Page Represents the Host**: The page represents the capability to debug, not the running instance
+3. **Ready for Connection**: Debugger can connect even before JS loads (useful for debugging initialization)
+4. **Consistent Page ID**: The same page persists across instance reloads
+
+**Current Windows Implementation**: ✅ **Correct**
+
+```cpp
+ReactNativeHost::ReactNativeHost() noexcept {
+  // Register page in constructor
+  if (inspectorFlags.getFuseboxEnabled() && !m_inspectorPageId.has_value()) {
+    m_inspectorHostDelegate = std::make_shared<ModernInspectorHostTargetDelegate>(*this);
+    m_inspectorTarget = HostTarget::create(*m_inspectorHostDelegate, executor);
+    m_inspectorPageId = getInspectorInstance().addPage(...);
+  }
+}
+```
+
+**Why NOT Register Before LoadInstance?**:
+
+- ❌ Would delay debugger availability
+- ❌ Would prevent debugging initialization code
+- ❌ Would require re-registration logic on reload
+- ❌ Would diverge from iOS/Android patterns
+
+**Recommendation**: **Keep registration in `ReactNativeHost` constructor**. The current implementation is correct and matches iOS/Android.
+
+### Q3: When Should Debugger Pages Be Unregistered?
+
+**Answer**: **Pages should survive instance reloads and be unregistered only on host destruction** (current design is correct).
+
+**Analysis of iOS Pattern**:
+
+```objc++
+- (void)dealloc {
+  // Unregister only in dealloc (destructor)
+  if (_inspectorPageId.has_value()) {
+    __block auto inspectorPageId = std::move(_inspectorPageId);
+    __block auto inspectorTarget = std::move(_inspectorTarget);
+    RCTExecuteOnMainQueue(^{
+      getInspectorInstance().removePage(*inspectorPageId);
+      inspectorPageId.reset();
+      // ... destroy inspectorTarget on JS thread ...
+    });
+  }
+}
+
+- (void)didReceiveReloadCommand {
+  // Reload does NOT unregister the page
+  [self reload:^(NSURL *) {}];
+}
+```
+
+**Analysis of Android Pattern**:
+
+```cpp
+ReactInstanceManagerInspectorTarget::~ReactInstanceManagerInspectorTarget() {
+  // Unregister only in destructor
+  if (inspectorPageId_.has_value()) {
+    inspectorExecutor_([inspectorPageId = *inspectorPageId_,
+                        inspectorTarget = std::move(inspectorTarget_)]() {
+      getInspectorInstance().removePage(inspectorPageId);
+      (void)inspectorTarget;
+    });
+  }
+}
+```
+
+**Key Insights**:
+
+1. **Page Lifetime = Host Lifetime**: The inspector page lives as long as the host object
+2. **Survives Reloads**: Instance reloads do NOT unregister/re-register the page
+3. **Consistent Page ID**: The debugger sees the same page across reloads
+4. **Sessions Survive**: Active debugging sessions can survive instance reload (debugger stays connected)
+
+**Why Pages Survive Reloads**:
+
+1. **Debugger UX**: User doesn't want to reconnect debugger after every reload
+2. **Fast Refresh**: During development, apps reload frequently - reconnecting would be annoying
+3. **Session Continuity**: Breakpoints, watches, and debugger state can persist
+4. **Metro Design**: Metro's inspector proxy expects stable page IDs
+
+**Current Windows Implementation**: ✅ **Correct**
+
+```cpp
+ReactNativeHost::~ReactNativeHost() noexcept {
+  // Unregister only in destructor
+  if (m_inspectorPageId.has_value()) {
+    getInspectorInstance().removePage(*m_inspectorPageId);
+    m_inspectorPageId.reset();
+    m_inspectorTarget.reset();
+  }
+}
+
+// ReloadInstance() does NOT touch inspector page
+IAsyncAction ReactNativeHost::ReloadInstance() noexcept {
+  // ... reload logic, but m_inspectorPageId unchanged ...
+}
+```
+
+**Recommendation**: **Keep unregistration only in destructor**. The current implementation is correct and matches iOS/Android.
+
+### Q4: How to Associate Specific RNH Instance with DevSupportManager?
+
+**Answer**: **DevSupportManager doesn't need to know about specific RNH instances** - it provides shared services, and the association happens through other mechanisms.
+
+**Current Architecture Analysis**:
+
+```cpp
+// DevSupportManager is a singleton providing shared services
+const std::shared_ptr<IDevSupportManager> &GetSharedDevManager() noexcept {
+  static std::shared_ptr<IDevSupportManager> s_devManager(...);
+  return s_devManager;
+}
+
+// Called during instance initialization (bridge-based path)
+void OInstance::Initialize() {
+  if (shouldStartHermesInspector(*m_devSettings)) {
+    m_devManager->EnsureHermesInspector(
+        m_devSettings->sourceBundleHost,
+        m_devSettings->sourceBundlePort,
+        m_devSettings->bundleAppId);
+  }
+}
+
+// DevSupportManager creates shared infrastructure
+void DevSupportManager::EnsureHermesInspector(...) {
+  static std::once_flag once;
+  std::call_once(once, [this, ...]() {
+    // Create single shared InspectorPackagerConnection
+    m_fuseboxInspectorPackagerConnection = 
+        std::make_unique<InspectorPackagerConnection>(
+            getInspectorInstance(),  // ← Global inspector
+            "React Native Windows",
+            delegate);
+    m_fuseboxInspectorPackagerConnection->connect();
+  });
+}
+```
+
+**Key Insights**:
+
+1. **DevSupportManager Provides Shared Services**:
+   - Single WebSocket connection to Metro
+   - Bundle downloading
+   - Live reload coordination
+   - BUT: Does NOT know about specific instances
+
+2. **Association Happens Through Global Inspector**:
+   ```
+   RNH #1 → HostTarget #1 ──┐
+   RNH #2 → HostTarget #2 ──┼─→ getInspectorInstance() ←─ InspectorPackagerConnection
+   RNH #3 → HostTarget #3 ──┘     (Global Singleton)          (in DevSupportManager)
+   ```
+
+3. **Per-Instance State Lives in HostTarget**:
+   - Each `ReactNativeHost` has its own `HostTarget`
+   - Each `HostTarget` has its own delegate with instance-specific logic
+   - When debugger connects to a page, it connects to that specific `HostTarget`
+
+4. **Communication Flow**:
+   ```
+   Metro ←─ WebSocket ─→ InspectorPackagerConnection (singleton)
+                                     ↓
+                           getInspectorInstance() (global)
+                                     ↓
+                           Routes to specific HostTarget based on page ID
+                                     ↓
+                           HostTarget #N (per-instance)
+                                     ↓
+                           ReactNativeHost #N
+   ```
+
+**Why DevSupportManager Doesn't Track Instances**:
+
+1. **Global Inspector Handles Routing**: The `IInspector` singleton already tracks all pages and routes messages
+2. **Decoupling**: `DevSupportManager` doesn't need to know about React instances
+3. **Matches iOS/Android**: Neither platform has dev support manager tracking instances
+
+**What About EnsureHermesInspector?**
+
+Looking at the current call:
+```cpp
+m_devManager->EnsureHermesInspector(sourceBundleHost, sourceBundlePort, bundleAppId);
+```
+
+This is called per-instance but uses `std::call_once` internally, so only the **first** call actually creates the connection. Subsequent calls from other instances do nothing.
+
+**Potential Issue**: If different RNH instances want different `sourceBundleHost` or `sourceBundlePort`, only the first one wins!
+
+**Recommendation for EnsureHermesInspector**:
+
+```cpp
+// Option 1: Remove per-instance call, make it truly global
+class DevSupportManager {
+ public:
+  // Call once at app startup, not per-instance
+  static void InitializeInspector(
+      const std::string &packagerHost,
+      const uint16_t packagerPort) {
+    static std::once_flag once;
+    std::call_once(once, [&]() {
+      GetSharedDevManager()->createInspectorConnection(packagerHost, packagerPort);
+    });
+  }
+};
+
+// Option 2: Validate subsequent calls match initial settings
+void DevSupportManager::EnsureHermesInspector(
+    const std::string &packagerHost,
+    const uint16_t packagerPort,
+    const std::string &bundleAppId) {
+  
+  static std::once_flag once;
+  static std::string initialHost;
+  static uint16_t initialPort;
+  
+  std::call_once(once, [&]() {
+    initialHost = packagerHost;
+    initialPort = packagerPort;
+    // Create connection...
+  });
+  
+  // Warn if different instances use different settings
+  if (packagerHost != initialHost || packagerPort != initialPort) {
+    OutputDebugStringA("Warning: Multiple RNH instances with different packager settings!");
+  }
+}
+```
+
+**Summary**: DevSupportManager doesn't need to track RNH instances. The global `IInspector` handles routing, and each `HostTarget` maintains its own instance-specific state. The current architecture is fundamentally sound, but consider making packager settings truly global to avoid confusion.
+
+## Architectural Recommendations Summary
+
+Based on this analysis, here are the **confirmed correct design decisions**:
+
+1. ✅ **ReactInspectorThread as Standalone Singleton**: Keep it separate from `DevSupportManager`
+2. ✅ **Register Pages in Constructor**: `ReactNativeHost` constructor is the right place
+3. ✅ **Unregister Pages in Destructor Only**: Pages survive instance reloads
+4. ✅ **DevSupportManager Doesn't Track Instances**: Association happens through global `IInspector`
+
+The **only potential improvement**:
+- ⚠️ **Make packager settings truly global** or validate that all instances use the same settings
+
+The current Windows implementation correctly follows iOS/Android patterns in all key areas!
 
 ### DevSupportManager - Shared Singleton Pattern
 
