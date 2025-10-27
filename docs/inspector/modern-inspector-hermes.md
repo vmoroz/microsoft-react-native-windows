@@ -90,16 +90,18 @@ HermesRuntimeAgentDelegate (session-specific)
 
 ### Expected Lifetime Behavior
 
-From iOS/Android implementation analysis:
+From React Native source code analysis (both bridgeless and legacy bridge):
+
+#### Bridgeless Architecture (ReactInstance.cpp)
 
 ```cpp
-// In ReactInstance.cpp (cross-platform bridgeless)
+// In ReactInstance.cpp - Registration during initialization
 void ReactInstance::initializeRuntime(...) {
   // Runtime created here
   
   if (parentInspectorTarget_) {
     parentInspectorTarget_->execute([this, ...](HostTarget& hostTarget) {
-      // Register InstanceTarget (survives reloads)
+      // Register InstanceTarget (RECREATED on each reload)
       inspectorTarget_ = &hostTarget.registerInstance(*this);
       
       // Register RuntimeTarget (RECREATED on each reload)
@@ -110,14 +112,112 @@ void ReactInstance::initializeRuntime(...) {
   }
 }
 
+// In ReactInstance.cpp - Cleanup before reload
 void ReactInstance::unregisterFromInspector() {
   if (inspectorTarget_) {
+    assert(runtimeInspectorTarget_);
     // Unregister RuntimeTarget BEFORE destroying runtime
     inspectorTarget_->unregisterRuntime(*runtimeInspectorTarget_);
     
-    // InstanceTarget remains registered (survives reload)
-    // Only unregistered when ReactNativeHost is destroyed
+    assert(parentInspectorTarget_);
+    // Unregister InstanceTarget BEFORE destroying instance
+    parentInspectorTarget_->unregisterInstance(*inspectorTarget_);
+    
+    inspectorTarget_ = nullptr;
   }
+}
+```
+
+#### Legacy Bridge Architecture (Instance.cpp from cxxreact)
+
+```cpp
+// In Instance.cpp - Synchronous registration
+void Instance::initializeBridge(..., HostTarget* parentInspectorTarget) {
+  jsQueue->runOnQueueSync([this, &jsef, jsQueue]() {
+    nativeToJsBridge_ = std::make_shared<NativeToJsBridge>(...);
+    
+    if (parentInspectorTarget_ != nullptr) {
+      auto inspectorExecutor = parentInspectorTarget_->executorFromThis();
+      
+      // Wait for inspector initialization synchronously
+      std::mutex inspectorInitializedMutex;
+      std::condition_variable inspectorInitializedCv;
+      bool inspectorInitialized = false;
+      
+      inspectorExecutor([this, ...](HostTarget& hostTarget) {
+        // Register InstanceTarget
+        inspectorTarget_ = &hostTarget.registerInstance(*this);
+        
+        // Register RuntimeTarget
+        runtimeInspectorTarget_ = &inspectorTarget_->registerRuntime(
+            nativeToJsBridge_->getInspectorTargetDelegate(),
+            getRuntimeExecutor());
+        
+        // Signal completion
+        {
+          std::lock_guard lock(inspectorInitializedMutex);
+          inspectorInitialized = true;
+        }
+        inspectorInitializedCv.notify_one();
+      });
+      
+      // Wait for inspector initialization before continuing
+      {
+        std::unique_lock lock(inspectorInitializedMutex);
+        inspectorInitializedCv.wait(lock, [&] { return inspectorInitialized; });
+      }
+    }
+    
+    // JS runtime initialized AFTER inspector is ready
+    nativeToJsBridge_->initializeRuntime();
+  });
+}
+
+// In Instance.cpp - Cleanup (unregisters BOTH)
+void Instance::unregisterFromInspector() {
+  if (inspectorTarget_) {
+    assert(runtimeInspectorTarget_);
+    inspectorTarget_->unregisterRuntime(*runtimeInspectorTarget_);
+    
+    assert(parentInspectorTarget_);
+    parentInspectorTarget_->unregisterInstance(*inspectorTarget_);
+    
+    parentInspectorTarget_ = nullptr;
+    inspectorTarget_ = nullptr;
+  }
+}
+```
+
+**Key Insight from React Native Source**: Both architectures call **both** `unregisterRuntime()` and `unregisterInstance()` during cleanup. The InstanceTarget is **recreated on each reload**, not kept alive.
+
+#### How HostTarget Manages InstanceTarget
+
+From `HostTarget.cpp`:
+
+```cpp
+// HostTarget.cpp - registerInstance creates a NEW InstanceTarget
+InstanceTarget& HostTarget::registerInstance(InstanceTargetDelegate& delegate) {
+  assert(!currentInstance_ && "Only one instance allowed");
+  currentInstance_ = InstanceTarget::create(
+      executionContextManager_, delegate, makeVoidExecutor(executorFromThis()));
+  // Notify all connected sessions about the new instance
+  sessions_.forEach(
+      [currentInstance = &*currentInstance_](HostTargetSession& session) {
+        session.setCurrentInstance(currentInstance);
+      });
+  return *currentInstance_;
+}
+
+// HostTarget.cpp - unregisterInstance destroys it
+void HostTarget::unregisterInstance(InstanceTarget& instance) {
+  assert(
+      currentInstance_ && currentInstance_.get() == &instance &&
+      "Invalid unregistration");
+  // Notify sessions that instance is gone
+  sessions_.forEach(
+      [](HostTargetSession& session) { session.setCurrentInstance(nullptr); });
+  // Destroy the InstanceTarget
+  currentInstance_.reset();
 }
 ```
 
@@ -133,7 +233,7 @@ void ReactInstance::unregisterFromInspector() {
 6. New `HermesRuntime` created
 7. New `RuntimeTarget` should be created
 
-**Correct sequence** (should match iOS/Android):
+**Correct sequence** (matches React Native bridgeless and legacy):
 
 1. **Before destroying runtime**:
    ```cpp
@@ -141,6 +241,12 @@ void ReactInstance::unregisterFromInspector() {
    if (m_inspectorTarget && m_runtimeInspectorTarget) {
      m_inspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
      m_runtimeInspectorTarget = nullptr;
+   }
+   
+   // IMPORTANT: Also unregister the instance
+   if (m_parentHostTarget && m_inspectorTarget) {
+     m_parentHostTarget->unregisterInstance(*m_inspectorTarget);
+     m_inspectorTarget = nullptr;
    }
    ```
 
@@ -154,9 +260,13 @@ void ReactInstance::unregisterFromInspector() {
    m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
    ```
 
-4. **Register new runtime**:
+4. **Re-register instance and runtime**:
    ```cpp
-   if (m_inspectorTarget) {
+   if (m_parentHostTarget) {
+     // Register NEW InstanceTarget
+     m_inspectorTarget = &m_parentHostTarget->registerInstance(*this);
+     
+     // Register NEW RuntimeTarget
      auto& newRuntimeTarget = m_inspectorTarget->registerRuntime(
          m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
          runtimeExecutor);
@@ -283,7 +393,7 @@ class ReactInstanceWin {
 |-----------|---------------|---------------------|--------|
 | **ReactNativeHost** | Application lifetime | ❌ No | Application |
 | **HostTarget** | ReactNativeHost lifetime | ❌ No | ReactNativeHost |
-| **InstanceTarget** | ReactNativeHost lifetime | ❌ No | HostTarget |
+| **InstanceTarget** | Per-load (reload cycles) | ✅ Yes | HostTarget |
 | **ReactInstance** | Per-load (reload cycles) | ✅ Yes | ReactNativeHost |
 | **HermesRuntimeHolder** | Per-load (reload cycles) | ✅ Yes | ReactInstance |
 | **HermesRuntime** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder |
@@ -303,7 +413,7 @@ class ReactInstanceWin {
 
 `FrontendChannel` is a **callback function** used to send CDP messages (responses and events) from the inspector back to the debugging frontend (Chrome DevTools, VS Code, etc.).
 
-**Type Signature**:
+**Type Signature** (from `InspectorInterfaces.h`):
 ```cpp
 namespace facebook::react::jsinspector_modern {
 
@@ -321,103 +431,196 @@ using FrontendChannel = std::function<void(std::string_view messageJson)>;
 
 **Question**: Is `FrontendChannel` the same as the `ReactInspectorThread` singleton dispatcher?
 
-**Answer**: **No, they are different concepts with different purposes.**
+**Answer**: **No, they are COMPLETELY DIFFERENT concepts with different purposes.**
 
 #### FrontendChannel
 
-- **Purpose**: Send CDP messages **from inspector → frontend**
-- **Direction**: Outbound messages (responses/events)
+- **Purpose**: Send CDP messages **from inspector → frontend** (outbound communication)
+- **Direction**: One-way outbound (responses/events to Chrome DevTools)
 - **Type**: `std::function<void(std::string_view)>` callback
+- **Lifetime**: **Per debug session** (each session gets its own FrontendChannel)
 - **Threading**: Can be called from **any thread** (thread-safe)
-- **Lifetime**: Per debug session (each `RuntimeAgent` gets its own)
-- **Implementation**: Wraps WebSocket send or other transport
+- **Implementation**: Lambda that wraps `IRemoteConnection::onMessage()` (WebSocket send)
+- **Created in**: `HostTargetSession` constructor
 
 #### ReactInspectorThread (Windows-specific)
 
-- **Purpose**: Serialize inspector **control operations**
-- **Direction**: Internal inspector coordination
+- **Purpose**: Serialize inspector **control operations** (internal coordination)
+- **Direction**: Internal infrastructure coordination (not communication with frontend)
 - **Type**: `Mso::DispatchQueue` singleton
+- **Lifetime**: **Process-wide singleton** (shared across all instances)
 - **Threading**: Single serial queue for **all** inspector instances
-- **Lifetime**: Process-wide singleton
 - **Implementation**: Windows-specific executor for `HostTarget::create()`, etc.
+- **Used for**: HostTarget/InstanceTarget/RuntimeTarget lifecycle operations
+
+### How FrontendChannel is Actually Implemented
+
+From `HostTarget.cpp` - the actual React Native source code:
+
+```cpp
+// HostTarget.cpp - HostTargetSession constructor
+class HostTargetSession {
+ public:
+  explicit HostTargetSession(
+      std::unique_ptr<IRemoteConnection> remote,  // WebSocket connection
+      HostTargetController& targetController,
+      HostTargetMetadata hostMetadata,
+      VoidExecutor executor)
+      : remote_(std::make_shared<RAIIRemoteConnection>(std::move(remote))),
+        // CREATE FrontendChannel as a lambda that wraps IRemoteConnection
+        frontendChannel_(
+            [remoteWeak = std::weak_ptr(remote_)](std::string_view message) {
+              // weak_ptr prevents use-after-free if session disconnects
+              if (auto remote = remoteWeak.lock()) {
+                // Send CDP message to frontend via WebSocket
+                remote->onMessage(std::string(message));
+              }
+            }),
+        // Pass FrontendChannel to HostAgent
+        hostAgent_(
+            frontendChannel_,  // <-- Passed to agent
+            targetController,
+            std::move(hostMetadata),
+            state_,
+            executor) {}
+  
+ private:
+  std::shared_ptr<RAIIRemoteConnection> remote_;  // WebSocket connection
+  FrontendChannel frontendChannel_;  // Lambda wrapping remote_->onMessage()
+  HostAgent hostAgent_;  // Uses frontendChannel_ to send CDP messages
+  SessionState state_;
+};
+```
+
+**Key Points**:
+1. **One FrontendChannel per session** - created in `HostTargetSession` constructor
+2. **Wraps `IRemoteConnection::onMessage()`** - which sends data over WebSocket
+3. **Uses weak_ptr** - prevents crashes if session disconnects during message send
+4. **Thread-safe** - can be called from any thread (WebSocket handles synchronization)
+5. **Not a singleton** - completely separate from ReactInspectorThread
 
 ### How FrontendChannel Works
+
+The FrontendChannel flows through the entire inspector hierarchy:
 
 ```
 Chrome DevTools
     ↑ (WebSocket)
     | FrontendChannel sends CDP messages here
-InspectorPackagerConnection (Metro) or Direct CDP Server
-    ↑ (FrontendChannel callback)
-HostTarget Session
-    ↑ (Creates FrontendChannel)
+IRemoteConnection (WebSocket wrapper)
+    ↑ (Wrapped by FrontendChannel lambda)
+HostTargetSession
+    | Creates FrontendChannel in constructor
+    ↓ (Passes to agents)
+HostAgent
+    ↓ (Forwards FrontendChannel)
 InstanceAgent
-    ↑ (Forwards FrontendChannel)
+    ↓ (Forwards FrontendChannel)
 RuntimeAgent
-    ↑ (Forwards FrontendChannel)
+    ↓ (Forwards FrontendChannel)
 HermesRuntimeAgentDelegate
-    ↑ (Forwards FrontendChannel)
+    ↓ (Forwards FrontendChannel)
 Hermes CDPAgent
     | Calls FrontendChannel("{ \"id\": 1, \"result\": {...} }")
     ↓
-Frontend receives CDP message
+Frontend receives CDP message via WebSocket
 ```
 
-### FrontendChannel Creation Flow
+### FrontendChannel Creation and Propagation
 
-1. **Session connects** (Chrome DevTools → Metro/DirectDebugger → HostTarget)
+From the React Native source code:
 
-2. **HostTarget creates session with FrontendChannel**:
-   ```cpp
-   // In HostTarget.cpp
-   class HostTargetSession {
-    public:
-     explicit HostTargetSession(
-         std::unique_ptr<IRemoteConnection> remote,
-         ...) 
-         : remote_(std::make_shared<RAIIRemoteConnection>(std::move(remote))),
-           frontendChannel_(
-               // Create FrontendChannel that sends via WebSocket
-               [remoteWeak = std::weak_ptr(remote_)](std::string_view message) {
-                 if (auto remote = remoteWeak.lock()) {
-                   remote->onMessage(std::string(message));  // Send to frontend
-                 }
-               }),
-           hostAgent_(frontendChannel_, ...) {}  // Pass to HostAgent
-   };
-   ```
+#### 1. Session connects and creates FrontendChannel
+#### 1. Session connects and creates FrontendChannel
 
-3. **HostAgent forwards to InstanceAgent**:
-   ```cpp
-   auto instanceAgent = std::make_shared<InstanceAgent>(
-       frontendChannel_,  // Same channel
-       ...);
-   ```
+Already shown above in `HostTargetSession` constructor.
 
-4. **InstanceAgent forwards to RuntimeAgent**:
-   ```cpp
-   auto runtimeAgent = std::make_shared<RuntimeAgent>(
-       channel,  // Same channel
-       ...);
-   ```
+#### 2. HostAgent stores FrontendChannel and forwards to InstanceAgent
 
-5. **RuntimeAgent creates RuntimeAgentDelegate** (e.g., HermesRuntimeAgentDelegate):
-   ```cpp
-   delegate_.createAgentDelegate(
-       channel,  // Same channel
-       sessionState,
-       ...);
-   ```
+From `HostAgent.cpp`:
+```cpp
+class HostAgent::Impl {
+ public:
+  Impl(
+      FrontendChannel frontendChannel,  // Received from session
+      HostTargetController& targetController,
+      HostTargetMetadata hostMetadata,
+      SessionState& sessionState,
+      VoidExecutor executor)
+      : frontendChannel_(frontendChannel),  // Store it
+        // ... other initialization
+  {}
+  
+  void setCurrentInstanceAgent(std::shared_ptr<InstanceAgent> instanceAgent) {
+    // When creating InstanceAgent, pass the SAME FrontendChannel
+    instanceAgent_ = std::move(instanceAgent);
+  }
+  
+ private:
+  FrontendChannel frontendChannel_;  // Member variable
+  std::shared_ptr<InstanceAgent> instanceAgent_;
+};
+```
 
-6. **HermesRuntimeAgentDelegate creates Hermes CDPAgent**:
-   ```cpp
-   hermes_ = hermes::cdp::CDPAgent::create(
-       executionContextID,
-       cdpDebugAPI,
-       runtimeTaskCallback,
-       frontendChannel,  // Hermes will call this to send messages
-       previousState);
-   ```
+#### 3. InstanceAgent forwards to RuntimeAgent
+
+From `InstanceAgent.cpp`:
+```cpp
+std::shared_ptr<RuntimeAgent> InstanceAgent::getOrCreateRuntimeAgent() {
+  if (!runtimeAgent_) {
+    // Create RuntimeAgent with the SAME FrontendChannel
+    runtimeAgent_ = std::make_shared<RuntimeAgent>(
+        frontendChannel_,  // Pass through
+        instanceTarget_,
+        sessionState_);
+  }
+  return runtimeAgent_;
+}
+```
+
+#### 4. RuntimeAgent forwards to RuntimeAgentDelegate (HermesRuntimeAgentDelegate)
+
+From `RuntimeAgent.cpp`:
+```cpp
+std::unique_ptr<RuntimeAgentDelegate> RuntimeAgent::Impl::createAgentDelegate() {
+  // Ask RuntimeTarget's delegate to create the agent delegate
+  return runtimeTarget_.delegate_.createAgentDelegate(
+      channel_,  // The FrontendChannel, passed to Hermes
+      sessionState_,
+      std::move(previouslyExportedState_),
+      executionContextDescription_,
+      runtimeExecutor_);
+}
+```
+
+#### 5. HermesRuntimeAgentDelegate forwards to Hermes CDPAgent
+
+From `HermesRuntimeAgentDelegate.cpp`:
+```cpp
+HermesRuntimeAgentDelegate::Impl::Impl(
+    FrontendChannel frontendChannel,  // Received from RuntimeAgent
+    SessionState& sessionState,
+    std::unique_ptr<RuntimeAgentDelegate::ExportedState> previouslyExportedState,
+    const ExecutionContextDescription& executionContextDescription,
+    HermesRuntime& runtime,
+    HermesRuntimeTargetDelegate& runtimeTargetDelegate,
+    const RuntimeExecutor& runtimeExecutor)
+    : hermes_(hermes::cdp::CDPAgent::create(
+          executionContextDescription.id,
+          runtimeTargetDelegate.getCDPDebugAPI(),
+          // RuntimeTask callback
+          [runtimeExecutor, &runtime](facebook::hermes::debugger::RuntimeTask fn) {
+            runtimeExecutor([&runtime, fn = std::move(fn)](auto&) { 
+              fn(runtime); 
+            });
+          },
+          frontendChannel,  // Pass FrontendChannel to Hermes!
+          HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()))) {
+  // Hermes CDPAgent now has the FrontendChannel and will use it to send messages
+}
+```
+
+**Result**: The **same FrontendChannel instance** (the lambda from HostTargetSession) is passed all the way down to Hermes CDPAgent. When Hermes needs to send a CDP response or event, it calls this FrontendChannel, which ultimately calls `IRemoteConnection::onMessage()` to send data over the WebSocket.
 
 ### FrontendChannel Thread Safety
 
@@ -428,62 +631,23 @@ Frontend receives CDP message
 - Some CDP events are triggered from background threads
 - The transport (WebSocket) handles thread synchronization
 
-**Example in InspectorPackagerConnection**:
-```cpp
-// InspectorPackagerConnection.cpp
-class RemoteConnection : public IRemoteConnection {
-  void onMessage(std::string message) override {
-    // This may be called from ANY thread
-    // InspectorPackagerConnection handles synchronization
-    webSocket_->send(message);
-  }
-};
-```
-
-### FrontendChannel in Windows Integration
-
-**Your Windows implementation** should:
-
-1. **Create FrontendChannel in session**:
-   ```cpp
-   // When session connects
-   auto frontendChannel = [weakWebSocket = std::weak_ptr(webSocket_)](
-       std::string_view messageJson) {
-     if (auto ws = weakWebSocket.lock()) {
-       ws->send(std::string(messageJson));  // Send to Metro or Chrome
-     }
-   };
-   ```
-
-2. **Pass to HermesRuntimeAgentDelegate**:
-   ```cpp
-   auto hermesAgentDelegate = std::make_unique<HermesRuntimeAgentDelegate>(
-       frontendChannel,  // Hermes will use this to respond
-       sessionState,
-       previousState,
-       executionContextDescription,
-       hermesRuntime,
-       runtimeTargetDelegate,
-       runtimeExecutor);
-   ```
-
-3. **Hermes calls it to send CDP messages**:
-   ```cpp
-   // Inside Hermes CDPAgent
-   frontendChannel(R"({"id": 1, "result": {"breakpointId": "1:10:0"}})");
-   ```
+**Implementation in React Native**:
+- The `IRemoteConnection::onMessage()` method must be thread-safe
+- On iOS: WebSocket operations dispatched to main queue
+- On Android: WebSocket operations synchronized internally
+- On Windows: Should dispatch to appropriate thread for WebSocket send
 
 ### Relationship to ReactInspectorThread
 
 **ReactInspectorThread** is used for:
 - ✅ `HostTarget::create()` executor parameter
-- ✅ Serializing inspector infrastructure operations
+- ✅ Serializing inspector infrastructure operations (register/unregister targets)
 - ✅ Ensuring inspector control flow is single-threaded
 
 **FrontendChannel** is used for:
-- ✅ Sending CDP messages to frontend
-- ✅ Per-session communication
-- ✅ Can be called from any thread
+- ✅ Sending CDP messages to frontend (responses and events)
+- ✅ Per-session communication channel
+- ✅ Can be called from any thread (not tied to inspector thread)
 
 **They are complementary**, not the same:
 
@@ -498,10 +662,13 @@ m_inspectorTarget = HostTarget::create(
     });
 
 // FrontendChannel: For sending CDP messages to Chrome
-auto frontendChannel = [webSocket](std::string_view msg) {
-  webSocket->send(std::string(msg));  // To frontend
+// (Created per session in HostTargetSession)
+auto frontendChannel = [remoteWeak](std::string_view msg) {
+  if (auto remote = remoteWeak.lock()) {
+    remote->onMessage(std::string(msg));  // To frontend via WebSocket
+  }
 };
-auto runtimeAgent = runtimeTarget.createAgent(frontendChannel, sessionState);
+// frontendChannel is passed to all agents in the session
 ```
 
 ### Summary: FrontendChannel vs ReactInspectorThread
