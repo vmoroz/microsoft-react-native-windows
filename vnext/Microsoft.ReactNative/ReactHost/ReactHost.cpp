@@ -8,8 +8,12 @@
 
 #include <CppRuntimeOptions.h>
 
+#include <jsinspector-modern/InspectorFlags.h>
 #include <react/featureflags/ReactNativeFeatureFlags.h>
 #include <react/featureflags/ReactNativeFeatureFlagsDefaults.h>
+
+#include "Inspector/ReactInspectorThread.h"
+#include "ReactHost/DebuggerNotifications.h"
 
 namespace Mso::React {
 
@@ -282,11 +286,14 @@ bool ReactOptions::EnableDefaultCrashHandler() const noexcept {
   return winrt::unbox_value_or<bool>(properties.Get(EnableDefaultCrashHandlerProperty()), false);
 }
 
+//=============================================================================================
+// ReactNativeWindowsFeatureFlags implementation
+//=============================================================================================
+
 class ReactNativeWindowsFeatureFlags : public facebook::react::ReactNativeFeatureFlagsDefaults {
  public:
   bool enableBridgelessArchitecture() override {
 #ifdef USE_FABRIC
-    OutputDebugStringA("ReactNativeWindowsFeatureFlags::enableBridgelessArchitecture() called\n");
     return true;
 #else
     return false;
@@ -298,18 +305,60 @@ class ReactNativeWindowsFeatureFlags : public facebook::react::ReactNativeFeatur
   }
 
   bool fuseboxEnabledRelease() override {
-    // log when called 
-    OutputDebugStringA("ReactNativeWindowsFeatureFlags::fuseboxEnabledRelease() called\n");
-    return true;  // Enable Fusebox (modern CDP backend) by default for React Native Windows
+    return true; // Enable Fusebox (modern CDP backend) by default for React Native Windows
   }
 
   bool fuseboxNetworkInspectionEnabled() override {
-     OutputDebugStringA("ReactNativeWindowsFeatureFlags::fuseboxNetworkInspectionEnabled() called\n");
-    return true;  // Enable network inspection support in Fusebox
+    return true; // Enable network inspection support in Fusebox
   }
 };
 
-std::once_flag g_FlagInitFeatureFlags;
+//=============================================================================================
+// ReactInspectorHostTargetDelegate implementation
+//=============================================================================================
+
+class ReactInspectorHostTargetDelegate : public facebook::react::jsinspector_modern::HostTargetDelegate,
+                                         public std::enable_shared_from_this<ReactInspectorHostTargetDelegate> {
+ public:
+  ReactInspectorHostTargetDelegate(Mso::WeakPtr<ReactHost> &&reactHost) noexcept : m_reactHost(std::move(reactHost)) {}
+
+  facebook::react::jsinspector_modern::HostTargetMetadata getMetadata() override {
+    // TODO: (vmoroz) provide more info
+    return {
+        .integrationName = "React Native Windows (Host)",
+    };
+  }
+
+  void onReload(facebook::react::jsinspector_modern::HostTargetDelegate::PageReloadRequest const &request) override {
+    if (Mso::CntPtr<ReactHost> reactHost = m_reactHost.GetStrongPtr()) {
+      reactHost->ReloadInstance();
+    }
+  }
+
+  void onSetPausedInDebuggerMessage(
+      facebook::react::jsinspector_modern::HostTargetDelegate::OverlaySetPausedInDebuggerMessageRequest const &request)
+      override {
+    if (Mso::CntPtr<ReactHost> reactHost = m_reactHost.GetStrongPtr()) {
+      // TODO: (vmoroz) Implement
+      /*    if (!request.message.has_value()) {
+            ::Microsoft::ReactNative::DebuggerNotifications::OnShowDebuggerPausedOverlay(
+                instanceSettings.Notifications(), request.message.value(), [weakThis = weak_from_this()]() {
+                  if (auto strongThis = weakThis.lock()) {
+                    if (auto reactNativeHost = strongThis->m_reactNativeHost.get()) {
+                      winrt::get_self<ReactNativeHost>(reactNativeHost)->OnDebuggerResume();
+                    }
+                  }
+                });
+          } else {
+            ::Microsoft::ReactNative::DebuggerNotifications::OnHideDebuggerPausedOverlay(instanceSettings.Notifications());
+          }*/
+    }
+  }
+
+ private:
+  Mso::WeakPtr<ReactHost> m_reactHost;
+};
+
 //=============================================================================================
 // ReactHost implementation
 //=============================================================================================
@@ -317,8 +366,16 @@ std::once_flag g_FlagInitFeatureFlags;
 ReactHost::ReactHost(Mso::DispatchQueue const &queue) noexcept
     : Super{EnsureSerialQueue(queue)},
       m_options{Queue(), m_mutex},
-      m_notifyWhenClosed{ReactHostRegistry::Register(*this), Queue(), m_mutex} {
-  std::call_once(g_FlagInitFeatureFlags, []() noexcept {
+      m_notifyWhenClosed{ReactHostRegistry::Register(*this), Queue(), m_mutex},
+      m_inspectorHostDelegate{std::make_shared<ReactInspectorHostTargetDelegate>(this)},
+      m_inspectorTarget{facebook::react::jsinspector_modern::HostTarget::create(
+          *m_inspectorHostDelegate,
+          [](std::function<void()> &&callback) {
+            ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+                [callback = std::move(callback)]() { callback(); });
+          })} {
+  static std::once_flag initFeatureFlagsOnce;
+  std::call_once(initFeatureFlagsOnce, []() noexcept {
     facebook::react::ReactNativeFeatureFlags::override(std::make_unique<ReactNativeWindowsFeatureFlags>());
   });
 }
@@ -539,6 +596,61 @@ void ReactHost::DetachViewHost(ReactViewHost &viewHost) noexcept {
   VerifyElseCrashSzTag(it != viewHosts.end(), "The view host is not attached", 0x0281e3d9 /* tag_c64pz */);
   viewHosts.erase(it);
 }
+
+#if 0
+
+  auto &inspectorFlags = facebook::react::jsinspector_modern::InspectorFlags::getInstance();
+
+  if (inspectorFlags.getFuseboxEnabled() && !m_inspectorPageId.has_value()) {
+    m_inspectorHostDelegate = std::make_shared<ModernInspectorHostTargetDelegate>(*this);
+    m_inspectorTarget = facebook::react::jsinspector_modern::HostTarget::create(
+        *m_inspectorHostDelegate, [](std::function<void()> &&callback) {
+          ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+              [callback = std::move(callback)]() { callback(); });
+        });
+
+    std::weak_ptr<facebook::react::jsinspector_modern::HostTarget> weakInspectorTarget = m_inspectorTarget;
+    facebook::react::jsinspector_modern::InspectorTargetCapabilities capabilities;
+    capabilities.nativePageReloads = true;
+    capabilities.prefersFuseboxFrontend = true;
+    m_inspectorPageId = facebook::react::jsinspector_modern::getInspectorInstance().addPage(
+        "React Native Windows (Experimental)",
+        /* vm */ "",
+        [weakInspectorTarget](std::unique_ptr<facebook::react::jsinspector_modern::IRemoteConnection> remote)
+            -> std::unique_ptr<facebook::react::jsinspector_modern::ILocalConnection> {
+          if (const auto inspectorTarget = weakInspectorTarget.lock()) {
+            // facebook::react::jsinspector_modern::HostTarget::SessionMetadata sessionMetadata;
+            // sessionMetadata.integrationName = "React Native Windows (Host)";
+            // return inspectorTarget->connect(std::move(remote), sessionMetadata);
+            return inspectorTarget->connect(std::move(remote));
+          }
+
+          // This can happen if we're about to be dealloc'd. Reject the connection.
+          return nullptr;
+        },
+        capabilities);
+  }
+
+  ReactNativeHost::~ReactNativeHost() noexcept {
+  if (m_inspectorPageId.has_value()) {
+    facebook::react::jsinspector_modern::getInspectorInstance().removePage(*m_inspectorPageId);
+    m_inspectorPageId.reset();
+    m_inspectorTarget.reset();
+  }
+}
+
+void ReactNativeHost::OnDebuggerResume() noexcept {
+::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+    [weakInspectorTarget = std::weak_ptr(m_inspectorTarget)]() {
+      if (const auto inspectorTarget = weakInspectorTarget.lock()) {
+        inspectorTarget->sendCommand(facebook::react::jsinspector_modern::HostCommand::DebuggerResume);
+      }
+    });
+}
+
+  reactOptions.InspectorTarget = m_inspectorTarget.get();
+
+#endif
 
 //=============================================================================================
 // ReactViewHost implementation

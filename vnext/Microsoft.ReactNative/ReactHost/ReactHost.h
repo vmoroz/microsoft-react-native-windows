@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <jsinspector-modern/HostTarget.h>
 #include <mutex>
 #include <unordered_map>
 #include "AsyncActionQueue.h"
@@ -15,6 +16,7 @@
 
 namespace Mso::React {
 
+class ReactInspectorHostTargetDelegate;
 class ReactViewHost;
 
 //! ReactHost manages lifetime of ReactNative instance.
@@ -77,6 +79,8 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   AsyncAction MakeLoadInstanceAction(ReactOptions &&options) noexcept;
   AsyncAction MakeUnloadInstanceAction() noexcept;
 
+  void OnDebuggerResume() noexcept;
+
  private:
   mutable std::mutex m_mutex;
   const Mso::InvokeElsePostExecutor m_executor{Queue()};
@@ -92,6 +96,10 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   size_t m_pendingUnloadActionId{0};
   size_t m_nextUnloadActionId{0};
   const Mso::ActiveField<bool> m_isInstanceUnloading{false, Queue()};
+
+  const std::shared_ptr<facebook::react::jsinspector_modern::HostTargetDelegate> m_inspectorHostDelegate;
+  const std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> m_inspectorTarget;
+  std::optional<int32_t> m_inspectorPageId{std::nullopt};
 };
 
 //! Implements a cross-platform host for a React view
@@ -126,6 +134,10 @@ class ReactViewHost final : public ActiveObject<IReactViewHost> {
 
   template <class TCallback>
   Mso::Future<void> PostInQueue(TCallback &&callback) noexcept;
+
+  void IsInspectable() noexcept;
+  void AddInspectorPage() noexcept;
+  void RemoveInspectorPage() noexcept;
 
  private:
   mutable std::mutex m_mutex;
