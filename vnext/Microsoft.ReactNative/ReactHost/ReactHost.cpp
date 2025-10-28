@@ -15,6 +15,8 @@
 #include "Inspector/ReactInspectorThread.h"
 #include "ReactHost/DebuggerNotifications.h"
 
+using namespace facebook::react;
+
 namespace Mso::React {
 
 //=============================================================================================
@@ -317,27 +319,26 @@ class ReactNativeWindowsFeatureFlags : public facebook::react::ReactNativeFeatur
 // ReactInspectorHostTargetDelegate implementation
 //=============================================================================================
 
-class ReactInspectorHostTargetDelegate : public facebook::react::jsinspector_modern::HostTargetDelegate,
+class ReactInspectorHostTargetDelegate : public jsinspector_modern::HostTargetDelegate,
                                          public std::enable_shared_from_this<ReactInspectorHostTargetDelegate> {
  public:
   ReactInspectorHostTargetDelegate(Mso::WeakPtr<ReactHost> &&reactHost) noexcept : m_reactHost(std::move(reactHost)) {}
 
-  facebook::react::jsinspector_modern::HostTargetMetadata getMetadata() override {
+  jsinspector_modern::HostTargetMetadata getMetadata() override {
     // TODO: (vmoroz) provide more info
     return {
         .integrationName = "React Native Windows (Host)",
     };
   }
 
-  void onReload(facebook::react::jsinspector_modern::HostTargetDelegate::PageReloadRequest const &request) override {
+  void onReload(jsinspector_modern::HostTargetDelegate::PageReloadRequest const &request) override {
     if (Mso::CntPtr<ReactHost> reactHost = m_reactHost.GetStrongPtr()) {
       reactHost->ReloadInstance();
     }
   }
 
   void onSetPausedInDebuggerMessage(
-      facebook::react::jsinspector_modern::HostTargetDelegate::OverlaySetPausedInDebuggerMessageRequest const &request)
-      override {
+      jsinspector_modern::HostTargetDelegate::OverlaySetPausedInDebuggerMessageRequest const &request) override {
     if (Mso::CntPtr<ReactHost> reactHost = m_reactHost.GetStrongPtr()) {
       // TODO: (vmoroz) Implement
       /*    if (!request.message.has_value()) {
@@ -368,15 +369,14 @@ ReactHost::ReactHost(Mso::DispatchQueue const &queue) noexcept
       m_options{Queue(), m_mutex},
       m_notifyWhenClosed{ReactHostRegistry::Register(*this), Queue(), m_mutex},
       m_inspectorHostDelegate{std::make_shared<ReactInspectorHostTargetDelegate>(this)},
-      m_inspectorTarget{facebook::react::jsinspector_modern::HostTarget::create(
-          *m_inspectorHostDelegate,
-          [](std::function<void()> &&callback) {
+      m_inspectorHost{
+          jsinspector_modern::HostTarget::create(*m_inspectorHostDelegate, [](std::function<void()> &&callback) {
             ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
                 [callback = std::move(callback)]() { callback(); });
           })} {
   static std::once_flag initFeatureFlagsOnce;
   std::call_once(initFeatureFlagsOnce, []() noexcept {
-    facebook::react::ReactNativeFeatureFlags::override(std::make_unique<ReactNativeWindowsFeatureFlags>());
+    ReactNativeFeatureFlags::override(std::make_unique<ReactNativeWindowsFeatureFlags>());
   });
 }
 
@@ -388,15 +388,16 @@ void ReactHost::Finalize() noexcept {
   // Since each AsyncAction has a strong ref count to ReactHost, the AsyncActionQueue must be empty.
   // Thus, we only need to call UnloadInQueue to unload ReactInstance if the ReactHost is not closed yet.
   if (Mso::Promise<void> notifyWhenClosed = m_notifyWhenClosed.Exchange(nullptr)) {
-    UnloadInQueue(0).Then<Mso::Executors::Inline>(
-        [notifyWhenClosed = std::move(notifyWhenClosed)]() noexcept { notifyWhenClosed.TrySetValue(); });
+    UnloadInQueue(UnloadReason::CloseHost, 0)
+        .Then<Mso::Executors::Inline>(
+            [notifyWhenClosed = std::move(notifyWhenClosed)]() noexcept { notifyWhenClosed.TrySetValue(); });
   }
 }
 
 void ReactHost::Close() noexcept {
   InvokeInQueue([this]() noexcept {
     // Put the ReactHost to the closed state, unload ReactInstance, and notify the closing Promise.
-    auto whenClosed = m_actionQueue.Load()->PostAction(MakeUnloadInstanceAction());
+    auto whenClosed = m_actionQueue.Load()->PostAction(MakeUnloadInstanceAction(UnloadReason::CloseHost));
 
     // After we set the m_notifyWhenClosed to null, the ReactHost is considered to be closed.
     Mso::SetPromiseValue(m_notifyWhenClosed.Exchange(nullptr), std::move(whenClosed));
@@ -448,12 +449,14 @@ Mso::Future<void> ReactHost::ReloadInstance() noexcept {
 
 Mso::Future<void> ReactHost::ReloadInstanceWithOptions(ReactOptions &&options) noexcept {
   return PostInQueue([this, options = std::move(options)]() mutable noexcept {
-    return m_actionQueue.Load()->PostActions({MakeUnloadInstanceAction(), MakeLoadInstanceAction(std::move(options))});
+    return m_actionQueue.Load()->PostActions(
+        {MakeUnloadInstanceAction(UnloadReason::Unload), MakeLoadInstanceAction(std::move(options))});
   });
 }
 
 Mso::Future<void> ReactHost::UnloadInstance() noexcept {
-  return PostInQueue([this]() noexcept { return m_actionQueue.Load()->PostAction(MakeUnloadInstanceAction()); });
+  return PostInQueue(
+      [this]() noexcept { return m_actionQueue.Load()->PostAction(MakeUnloadInstanceAction(UnloadReason::Unload)); });
 }
 
 AsyncAction ReactHost::MakeLoadInstanceAction(ReactOptions &&options) noexcept {
@@ -462,11 +465,13 @@ AsyncAction ReactHost::MakeLoadInstanceAction(ReactOptions &&options) noexcept {
   };
 }
 
-AsyncAction ReactHost::MakeUnloadInstanceAction() noexcept {
+AsyncAction ReactHost::MakeUnloadInstanceAction(UnloadReason reason) noexcept {
   Mso::Internal::VerifyIsInQueueElseCrash(Queue());
   size_t unloadActionId = ++m_nextUnloadActionId;
   m_pendingUnloadActionId = unloadActionId;
-  return [spThis = Mso::CntPtr{this}, unloadActionId]() noexcept { return spThis->UnloadInQueue(unloadActionId); };
+  return [spThis = Mso::CntPtr{this}, reason, unloadActionId]() noexcept {
+    return spThis->UnloadInQueue(reason, unloadActionId);
+  };
 }
 
 Mso::CntPtr<IReactViewHost> ReactHost::MakeViewHost(ReactViewOptions &&options) noexcept {
@@ -495,6 +500,12 @@ Mso::Future<void> ReactHost::LoadInQueue(ReactOptions &&options) noexcept {
   // If there is a pending unload action, then we cancel loading ReactInstance.
   if (PendingUnloadActionId()) {
     return Mso::MakeCanceledFuture();
+  }
+
+  if (IsInspectable()) {
+    AddInspectorPage();
+  } else {
+    RemoveInspectorPage();
   }
 
   Mso::Promise<void> whenCreated;
@@ -532,7 +543,7 @@ Mso::Future<void> ReactHost::LoadInQueue(ReactOptions &&options) noexcept {
   });
 }
 
-Mso::Future<void> ReactHost::UnloadInQueue(size_t unloadActionId) noexcept {
+Mso::Future<void> ReactHost::UnloadInQueue(UnloadReason reason, size_t unloadActionId) noexcept {
   Mso::Internal::VerifyIsInQueueElseCrash(Queue());
 
   // If the pending unload action Id does not match, then we have newer unload action,
@@ -554,21 +565,29 @@ Mso::Future<void> ReactHost::UnloadInQueue(size_t unloadActionId) noexcept {
 
   // We unload ReactInstance after all view instances are unloaded.
   // It is safe to capture 'this' because the Unload action keeps a strong reference to ReactHost.
-  return Mso::WhenAllCompleted(unloadCompletionList).Then(m_executor, [this](Mso::Maybe<void> && /*value*/) noexcept {
-    Mso::Future<void> onUnloaded;
-    if (auto reactInstance = m_reactInstance.Exchange(nullptr)) {
-      onUnloaded = reactInstance->Destroy();
-    }
+  return Mso::WhenAllCompleted(unloadCompletionList)
+      .Then(
+          m_executor,
+          [this](Mso::Maybe<void> && /*value*/) noexcept {
+            Mso::Future<void> onUnloaded;
+            if (auto reactInstance = m_reactInstance.Exchange(nullptr)) {
+              onUnloaded = reactInstance->Destroy();
+            }
 
-    m_isInstanceUnloading.Store(false);
-    m_lastError.Store({});
+            m_isInstanceUnloading.Store(false);
+            m_lastError.Store({});
 
-    if (!onUnloaded) {
-      onUnloaded = Mso::MakeSucceededFuture();
-    }
+            if (!onUnloaded) {
+              onUnloaded = Mso::MakeSucceededFuture();
+            }
 
-    return onUnloaded;
-  });
+            return onUnloaded;
+          })
+      .Then<Mso::Executors::Inline>([this, reason]() noexcept {
+        if (reason == UnloadReason::CloseHost) {
+          RemoveInspectorPage();
+        }
+      });
 }
 
 void ReactHost::ForEachViewHost(const Mso::FunctorRef<void(ReactViewHost &)> &action) noexcept {
@@ -597,60 +616,54 @@ void ReactHost::DetachViewHost(ReactViewHost &viewHost) noexcept {
   viewHosts.erase(it);
 }
 
-#if 0
+bool ReactHost::IsInspectable() noexcept {
+  ReactOptions &options = m_options.Load(); // We must be in the ReactHost queue here
+  return options.JsiEngine() == JSIEngine::Hermes &&
+      (options.UseDirectDebugger() || options.UseFastRefresh() || options.UseLiveReload());
+}
 
-  auto &inspectorFlags = facebook::react::jsinspector_modern::InspectorFlags::getInstance();
+void ReactHost::AddInspectorPage() noexcept {
+  if (m_inspectorPageId.has_value() || !IsInspectable())
+    return;
 
-  if (inspectorFlags.getFuseboxEnabled() && !m_inspectorPageId.has_value()) {
-    m_inspectorHostDelegate = std::make_shared<ModernInspectorHostTargetDelegate>(*this);
-    m_inspectorTarget = facebook::react::jsinspector_modern::HostTarget::create(
-        *m_inspectorHostDelegate, [](std::function<void()> &&callback) {
-          ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
-              [callback = std::move(callback)]() { callback(); });
-        });
+  jsinspector_modern::InspectorTargetCapabilities capabilities;
+  capabilities.nativePageReloads = true;
+  capabilities.prefersFuseboxFrontend = true;
+  // TODO: (vmoroz) improve the page name
+  m_inspectorPageId = jsinspector_modern::getInspectorInstance().addPage(
+      "React Native Windows (Experimental)",
+      "Hermes",
+      [weakInspectorHost =
+           std::weak_ptr(m_inspectorHost)](std::unique_ptr<jsinspector_modern::IRemoteConnection> remote)
+          -> std::unique_ptr<jsinspector_modern::ILocalConnection> {
+        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
+          return inspectorHost->connect(std::move(remote));
+        }
 
-    std::weak_ptr<facebook::react::jsinspector_modern::HostTarget> weakInspectorTarget = m_inspectorTarget;
-    facebook::react::jsinspector_modern::InspectorTargetCapabilities capabilities;
-    capabilities.nativePageReloads = true;
-    capabilities.prefersFuseboxFrontend = true;
-    m_inspectorPageId = facebook::react::jsinspector_modern::getInspectorInstance().addPage(
-        "React Native Windows (Experimental)",
-        /* vm */ "",
-        [weakInspectorTarget](std::unique_ptr<facebook::react::jsinspector_modern::IRemoteConnection> remote)
-            -> std::unique_ptr<facebook::react::jsinspector_modern::ILocalConnection> {
-          if (const auto inspectorTarget = weakInspectorTarget.lock()) {
-            // facebook::react::jsinspector_modern::HostTarget::SessionMetadata sessionMetadata;
-            // sessionMetadata.integrationName = "React Native Windows (Host)";
-            // return inspectorTarget->connect(std::move(remote), sessionMetadata);
-            return inspectorTarget->connect(std::move(remote));
-          }
+        // This can happen if we're about to shut down. Reject the connection.
+        return nullptr;
+      },
+      capabilities);
+}
 
-          // This can happen if we're about to be dealloc'd. Reject the connection.
-          return nullptr;
-        },
-        capabilities);
-  }
+void ReactHost::RemoveInspectorPage() noexcept {
+  if (!m_inspectorPageId.has_value())
+    return;
 
-  ReactNativeHost::~ReactNativeHost() noexcept {
+  jsinspector_modern::getInspectorInstance().removePage(*m_inspectorPageId);
+  m_inspectorPageId.reset();
+}
+
+void ReactHost::OnDebuggerResume() noexcept {
   if (m_inspectorPageId.has_value()) {
-    facebook::react::jsinspector_modern::getInspectorInstance().removePage(*m_inspectorPageId);
-    m_inspectorPageId.reset();
-    m_inspectorTarget.reset();
+    ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+        [weakInspectorHost = std::weak_ptr(m_inspectorHost)]() {
+          if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
+            inspectorHost->sendCommand(jsinspector_modern::HostCommand::DebuggerResume);
+          }
+        });
   }
 }
-
-void ReactNativeHost::OnDebuggerResume() noexcept {
-::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
-    [weakInspectorTarget = std::weak_ptr(m_inspectorTarget)]() {
-      if (const auto inspectorTarget = weakInspectorTarget.lock()) {
-        inspectorTarget->sendCommand(facebook::react::jsinspector_modern::HostCommand::DebuggerResume);
-      }
-    });
-}
-
-  reactOptions.InspectorTarget = m_inspectorTarget.get();
-
-#endif
 
 //=============================================================================================
 // ReactViewHost implementation
@@ -703,8 +716,8 @@ Mso::Future<void> ReactViewHost::AttachViewInstance(IReactViewInstance &viewInst
     m_reactHost->AttachViewHost(*this);
 
     return InitViewInstanceInQueue();
-    //// Schedule the viewInstance load in the action queue since there can be other load actions in the queue that need
-    //// to be consolidated.
+    // Schedule the viewInstance load in the action queue since there can be other load actions in the queue that need
+    // to be consolidated.
     // return m_actionQueue.Load()->PostAction(MakeInitViewInstanceAction());
   });
 }

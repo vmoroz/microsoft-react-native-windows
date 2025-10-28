@@ -54,9 +54,6 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
 
   Mso::CntPtr<AsyncActionQueue> ActionQueue() const noexcept;
 
-  Mso::Future<void> LoadInQueue(ReactOptions &&options) noexcept;
-  Mso::Future<void> UnloadInQueue(size_t unloadActionId) noexcept;
-
   void Close() noexcept;
   bool IsClosed() const noexcept;
 
@@ -65,6 +62,12 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
 
   template <class TCallback>
   Mso::Future<void> PostInQueue(TCallback &&callback) noexcept;
+
+ private:
+  enum class UnloadReason {
+    Unload,
+    CloseHost,
+  };
 
  private:
   friend MakePolicy;
@@ -77,9 +80,15 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   void ForEachViewHost(const Mso::FunctorRef<void(ReactViewHost &)> &action) noexcept;
 
   AsyncAction MakeLoadInstanceAction(ReactOptions &&options) noexcept;
-  AsyncAction MakeUnloadInstanceAction() noexcept;
+  AsyncAction MakeUnloadInstanceAction(UnloadReason reason) noexcept;
+
+  Mso::Future<void> LoadInQueue(ReactOptions &&options) noexcept;
+  Mso::Future<void> UnloadInQueue(UnloadReason reason, size_t unloadActionId) noexcept;
 
   void OnDebuggerResume() noexcept;
+  bool IsInspectable() noexcept;
+  void AddInspectorPage() noexcept;
+  void RemoveInspectorPage() noexcept;
 
  private:
   mutable std::mutex m_mutex;
@@ -98,7 +107,7 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   const Mso::ActiveField<bool> m_isInstanceUnloading{false, Queue()};
 
   const std::shared_ptr<facebook::react::jsinspector_modern::HostTargetDelegate> m_inspectorHostDelegate;
-  const std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> m_inspectorTarget;
+  const std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> m_inspectorHost;
   std::optional<int32_t> m_inspectorPageId{std::nullopt};
 };
 
@@ -134,10 +143,6 @@ class ReactViewHost final : public ActiveObject<IReactViewHost> {
 
   template <class TCallback>
   Mso::Future<void> PostInQueue(TCallback &&callback) noexcept;
-
-  void IsInspectable() noexcept;
-  void AddInspectorPage() noexcept;
-  void RemoveInspectorPage() noexcept;
 
  private:
   mutable std::mutex m_mutex;
