@@ -207,12 +207,11 @@ std::unique_ptr<const facebook::react::JSBigString> JsBigStringFromPath(
 
 } // namespace Microsoft::ReactNative
 
-namespace facebook {
-namespace react {
+namespace facebook::react {
 
 namespace {
 
-// OJSIExecutor is need to override getRuntimeTargetDelegate to support the modern JSI inspector.
+// OJSIExecutor is needed to override getRuntimeTargetDelegate to support the modern JSI inspector.
 class OJSIExecutor : public JSIExecutor {
  public:
   OJSIExecutor(
@@ -220,11 +219,14 @@ class OJSIExecutor : public JSIExecutor {
       std::shared_ptr<ExecutorDelegate> delegate,
       const JSIScopedTimeoutInvoker &timeoutInvoker,
       RuntimeInstaller runtimeInstaller,
-      std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> targetDelegate) noexcept
+      std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> &&targetDelegate) noexcept
       : JSIExecutor(std::move(runtime), std::move(delegate), timeoutInvoker, std::move(runtimeInstaller)),
-        targetDelegate_(std::move(targetDelegate_)) {}
-  // cant override from base class JSIExecutor as its not part of the JSIExecutor interface.
-  jsinspector_modern::RuntimeTargetDelegate &getRuntimeTargetDelegate() {
+        targetDelegate_(std::move(targetDelegate)) {}
+  jsinspector_modern::RuntimeTargetDelegate &getRuntimeTargetDelegate() override {
+    if (!targetDelegate_) {
+      // Use the fallback implementation from JSIExecutor.
+      return JSIExecutor::getRuntimeTargetDelegate();
+    }
     return *targetDelegate_;
   }
 
@@ -257,7 +259,7 @@ class OJSIExecutorFactory : public JSExecutorFactory {
           facebook::react::tracing::initializeJSHooks(runtime, isProfiling);
 #endif
         },
-        runtimeHolder_->getSharedRuntimeTargetDelegate());
+        runtimeHolder_->createRuntimeTargetDelegate());
   }
 
   OJSIExecutorFactory(
@@ -399,8 +401,9 @@ InstanceImpl::InstanceImpl(
 
   // Add app provided modules.
   for (auto &cxxModule : cxxModules) {
-    modules.push_back(std::make_unique<CxxNativeModule>(
-        m_innerInstance, move(std::get<0>(cxxModule)), move(std::get<1>(cxxModule)), move(std::get<2>(cxxModule))));
+    modules.push_back(
+        std::make_unique<CxxNativeModule>(
+            m_innerInstance, move(std::get<0>(cxxModule)), move(std::get<1>(cxxModule)), move(std::get<2>(cxxModule))));
   }
   m_moduleRegistry = std::make_shared<facebook::react::ModuleRegistry>(std::move(modules));
 
@@ -646,5 +649,4 @@ void InstanceImpl::invokeCallback(const int64_t callbackId, folly::dynamic &&par
   m_innerInstance->callJSCallback(callbackId, std::move(params));
 }
 
-} // namespace react
-} // namespace facebook
+} // namespace facebook::react

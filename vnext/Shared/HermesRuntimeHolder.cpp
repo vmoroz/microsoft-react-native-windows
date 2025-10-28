@@ -379,13 +379,9 @@ std::shared_ptr<facebook::jsi::Runtime> HermesRuntimeHolder::getRuntime() noexce
   return m_jsiRuntime;
 }
 
-const std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> &
-HermesRuntimeHolder::getSharedRuntimeTargetDelegate() {
-  if (!m_targetDelegate) {
-    m_targetDelegate = std::make_shared<Microsoft::ReactNative::HermesRuntimeTargetDelegate>(shared_from_this());
-  }
-
-  return m_targetDelegate;
+std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate>
+HermesRuntimeHolder::createRuntimeTargetDelegate() {
+  return std::make_shared<Microsoft::ReactNative::HermesRuntimeTargetDelegate>(shared_from_this());
 }
 
 void HermesRuntimeHolder::crashHandler(int fileDescriptor) noexcept {
@@ -443,7 +439,10 @@ facebook::jsi::Runtime &HermesJSRuntime::getRuntime() noexcept {
 }
 
 facebook::react::jsinspector_modern::RuntimeTargetDelegate &HermesJSRuntime::getRuntimeTargetDelegate() {
-  return *m_holder->getSharedRuntimeTargetDelegate();
+  if (!m_runtimeTargetDelegate) {
+    m_runtimeTargetDelegate = m_holder->createRuntimeTargetDelegate();
+  }
+  return *m_runtimeTargetDelegate;
 }
 
 } // namespace Microsoft::ReactNative

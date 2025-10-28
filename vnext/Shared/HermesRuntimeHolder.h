@@ -190,7 +190,7 @@ class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
       std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScriptStore) noexcept;
   ~HermesRuntimeHolder();
 
-  const std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> &getSharedRuntimeTargetDelegate()
+  std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> createRuntimeTargetDelegate()
       override;
 
   static std::shared_ptr<HermesRuntimeHolder> loadFrom(
@@ -215,7 +215,6 @@ class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
  private:
   jsr_runtime m_runtime{};
   std::shared_ptr<facebook::jsi::Runtime> m_jsiRuntime;
-  std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> m_targetDelegate;
   std::once_flag m_onceFlag{};
   std::thread::id m_ownThreadId{};
   std::weak_ptr<facebook::react::DevSettings> m_weakDevSettings;
@@ -233,6 +232,7 @@ class HermesJSRuntime final : public facebook::react::JSRuntime {
 
  private:
   std::shared_ptr<Microsoft::JSI::RuntimeHolderLazyInit> m_holder;
+  std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> m_runtimeTargetDelegate;
 };
 
 } // namespace Microsoft::ReactNative

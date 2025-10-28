@@ -45,7 +45,7 @@ class HermesStackTraceWrapper : public StackTrace {
 
 } // namespace
 
-HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder> hermesRuntimeHolder)
+HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder>&& hermesRuntimeHolder)
     : hermesRuntimeHolder_(std::move(hermesRuntimeHolder)),
       hermesCdpDebugger_(HermesDebuggerApi::createCdpDebugger(hermesRuntimeHolder_->getHermesRuntime())) {}
 
