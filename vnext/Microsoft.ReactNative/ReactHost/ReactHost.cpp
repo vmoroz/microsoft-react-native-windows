@@ -368,9 +368,9 @@ ReactHost::ReactHost(Mso::DispatchQueue const &queue) noexcept
     : Super{EnsureSerialQueue(queue)},
       m_options{Queue(), m_mutex},
       m_notifyWhenClosed{ReactHostRegistry::Register(*this), Queue(), m_mutex},
-      m_inspectorHostDelegate{std::make_shared<ReactInspectorHostTargetDelegate>(this)},
-      m_inspectorHost{
-          jsinspector_modern::HostTarget::create(*m_inspectorHostDelegate, [](std::function<void()> &&callback) {
+      m_inspectorHostTargetDelegate{std::make_shared<ReactInspectorHostTargetDelegate>(this)},
+      m_inspectorHostTarget{
+          jsinspector_modern::HostTarget::create(*m_inspectorHostTargetDelegate, [](std::function<void()> &&callback) {
             ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
                 [callback = std::move(callback)]() { callback(); });
           })} {
@@ -504,8 +504,10 @@ Mso::Future<void> ReactHost::LoadInQueue(ReactOptions &&options) noexcept {
 
   if (IsInspectable()) {
     AddInspectorPage();
+    m_options.Load().InspectorHostTarget = m_inspectorHostTarget.get();
   } else {
     RemoveInspectorPage();
+    m_options.Load().InspectorHostTarget = nullptr;
   }
 
   Mso::Promise<void> whenCreated;
@@ -566,27 +568,23 @@ Mso::Future<void> ReactHost::UnloadInQueue(UnloadReason reason, size_t unloadAct
   // We unload ReactInstance after all view instances are unloaded.
   // It is safe to capture 'this' because the Unload action keeps a strong reference to ReactHost.
   return Mso::WhenAllCompleted(unloadCompletionList)
-      .Then(
-          m_executor,
-          [this](Mso::Maybe<void> && /*value*/) noexcept {
-            Mso::Future<void> onUnloaded;
-            if (auto reactInstance = m_reactInstance.Exchange(nullptr)) {
-              onUnloaded = reactInstance->Destroy();
-            }
+      .Then(m_executor, [this, reason](Mso::Maybe<void> && /*value*/) noexcept {
+        Mso::Future<void> onUnloaded;
+        if (auto reactInstance = m_reactInstance.Exchange(nullptr)) {
+          onUnloaded = reactInstance->Destroy();
+        }
 
-            m_isInstanceUnloading.Store(false);
-            m_lastError.Store({});
+        m_isInstanceUnloading.Store(false);
+        m_lastError.Store({});
 
-            if (!onUnloaded) {
-              onUnloaded = Mso::MakeSucceededFuture();
-            }
+        if (!onUnloaded) {
+          onUnloaded = Mso::MakeSucceededFuture();
+        }
 
-            return onUnloaded;
-          })
-      .Then<Mso::Executors::Inline>([this, reason]() noexcept {
         if (reason == UnloadReason::CloseHost) {
           RemoveInspectorPage();
         }
+        return onUnloaded;
       });
 }
 
@@ -617,27 +615,27 @@ void ReactHost::DetachViewHost(ReactViewHost &viewHost) noexcept {
 }
 
 bool ReactHost::IsInspectable() noexcept {
-  ReactOptions &options = m_options.Load(); // We must be in the ReactHost queue here
-  return options.JsiEngine() == JSIEngine::Hermes &&
-      (options.UseDirectDebugger() || options.UseFastRefresh() || options.UseLiveReload());
+  ReactOptions &options = m_options.Load();
+  return options.JsiEngine() == JSIEngine::Hermes && options.UseDirectDebugger();
 }
 
 void ReactHost::AddInspectorPage() noexcept {
-  if (m_inspectorPageId.has_value() || !IsInspectable())
+  std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
+  if (inspectorPageId.has_value())
     return;
 
   jsinspector_modern::InspectorTargetCapabilities capabilities;
   capabilities.nativePageReloads = true;
   capabilities.prefersFuseboxFrontend = true;
   // TODO: (vmoroz) improve the page name
-  m_inspectorPageId = jsinspector_modern::getInspectorInstance().addPage(
+  inspectorPageId = jsinspector_modern::getInspectorInstance().addPage(
       "React Native Windows (Experimental)",
       "Hermes",
-      [weakInspectorHost =
-           std::weak_ptr(m_inspectorHost)](std::unique_ptr<jsinspector_modern::IRemoteConnection> remote)
+      [weakInspectorHostTarget =
+           std::weak_ptr(m_inspectorHostTarget)](std::unique_ptr<jsinspector_modern::IRemoteConnection> remote)
           -> std::unique_ptr<jsinspector_modern::ILocalConnection> {
-        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
-          return inspectorHost->connect(std::move(remote));
+        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHostTarget = weakInspectorHostTarget.lock()) {
+          return inspectorHostTarget->connect(std::move(remote));
         }
 
         // This can happen if we're about to shut down. Reject the connection.
@@ -647,22 +645,25 @@ void ReactHost::AddInspectorPage() noexcept {
 }
 
 void ReactHost::RemoveInspectorPage() noexcept {
-  if (!m_inspectorPageId.has_value())
+  std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
+  if (!inspectorPageId.has_value())
     return;
 
-  jsinspector_modern::getInspectorInstance().removePage(*m_inspectorPageId);
-  m_inspectorPageId.reset();
+  jsinspector_modern::getInspectorInstance().removePage(*inspectorPageId);
+  inspectorPageId.reset();
 }
 
 void ReactHost::OnDebuggerResume() noexcept {
-  if (m_inspectorPageId.has_value()) {
-    ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
-        [weakInspectorHost = std::weak_ptr(m_inspectorHost)]() {
-          if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
-            inspectorHost->sendCommand(jsinspector_modern::HostCommand::DebuggerResume);
-          }
-        });
-  }
+  // TODO: (vmoroz) implement
+  //std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
+  //if (inspectorPageId.has_value()) {
+  //  ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+  //      [weakInspectorHost = std::weak_ptr(m_inspectorHost)]() {
+  //        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
+  //          inspectorHost->sendCommand(jsinspector_modern::HostCommand::DebuggerResume);
+  //        }
+  //      });
+  //}
 }
 
 //=============================================================================================

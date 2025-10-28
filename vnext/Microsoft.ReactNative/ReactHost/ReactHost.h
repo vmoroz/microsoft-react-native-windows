@@ -106,9 +106,9 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   size_t m_nextUnloadActionId{0};
   const Mso::ActiveField<bool> m_isInstanceUnloading{false, Queue()};
 
-  const std::shared_ptr<facebook::react::jsinspector_modern::HostTargetDelegate> m_inspectorHostDelegate;
-  const std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> m_inspectorHost;
-  std::optional<int32_t> m_inspectorPageId{std::nullopt};
+  const std::shared_ptr<facebook::react::jsinspector_modern::HostTargetDelegate> m_inspectorHostTargetDelegate;
+  const std::shared_ptr<facebook::react::jsinspector_modern::HostTarget> m_inspectorHostTarget;
+  const Mso::ActiveField<std::optional<int32_t>> m_inspectorPageId{Queue()};
 };
 
 //! Implements a cross-platform host for a React view

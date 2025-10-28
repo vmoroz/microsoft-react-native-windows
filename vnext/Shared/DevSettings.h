@@ -117,7 +117,7 @@ struct DevSettings {
   bool useRuntimeScheduler{false};
 
   // The HostTarget instance for Fusebox
-  facebook::react::jsinspector_modern::HostTarget *inspectorTarget;
+  facebook::react::jsinspector_modern::HostTarget *inspectorHostTarget;
 };
 
 } // namespace react

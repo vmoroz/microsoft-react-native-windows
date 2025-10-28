@@ -241,7 +241,7 @@ struct ReactOptions {
   //! during development to report JavaScript errors to users
   std::shared_ptr<Mso::React::IRedBoxHandler> RedBoxHandler;
 
-  //! Flag to suggest sdx owner's preference on enabling Bytecode caching in Javascript Engine for corresponding SDX.
+  //! Flag to suggest sdx owner's preference on enabling Bytecode caching in JavaScript Engine for corresponding SDX.
   bool EnableBytecode{true};
 
   //! Flag controlling whether the JavaScript engine uses JIT compilation.
@@ -352,8 +352,8 @@ struct ReactOptions {
   //! It is called from the native queue.
   OnReactInstanceDestroyedCallback OnInstanceDestroyed;
 
-  //! The HostTarget instance for Fusebox
-  facebook::react::jsinspector_modern::HostTarget *InspectorTarget;
+  //! The HostTarget instance for modern inspector integration.
+  facebook::react::jsinspector_modern::HostTarget *InspectorHostTarget;
 };
 
 //! IReactHost manages a ReactNative instance.

@@ -165,8 +165,9 @@ struct BridgeUIBatchInstanceCallback final : public facebook::react::InstanceCal
               instance->m_batchingUIThread->runOnQueue([wkInstance]() {
                 if (auto instance = wkInstance.GetStrongPtr()) {
                   auto propBag = ReactPropertyBag(instance->m_reactContext->Properties());
-                  if (auto callback = propBag.Get(winrt::Microsoft::ReactNative::implementation::ReactCoreInjection::
-                                                      UIBatchCompleteCallbackProperty())) {
+                  if (auto callback = propBag.Get(
+                          winrt::Microsoft::ReactNative::implementation::ReactCoreInjection::
+                              UIBatchCompleteCallbackProperty())) {
                     (*callback)(instance->m_reactContext->Properties());
                   }
 #if !defined(CORE_ABI) && !defined(USE_FABRIC)
@@ -190,8 +191,9 @@ struct BridgeUIBatchInstanceCallback final : public facebook::react::InstanceCal
           instance->m_batchingUIThread->runOnQueue([wkInstance = m_wkInstance]() {
             if (auto instance = wkInstance.GetStrongPtr()) {
               auto propBag = ReactPropertyBag(instance->m_reactContext->Properties());
-              if (auto callback = propBag.Get(winrt::Microsoft::ReactNative::implementation::ReactCoreInjection::
-                                                  UIBatchCompleteCallbackProperty())) {
+              if (auto callback = propBag.Get(
+                      winrt::Microsoft::ReactNative::implementation::ReactCoreInjection::
+                          UIBatchCompleteCallbackProperty())) {
                 (*callback)(instance->m_reactContext->Properties());
               }
 #if !defined(CORE_ABI) && !defined(USE_FABRIC)
@@ -300,18 +302,6 @@ ReactInstanceWin::ReactInstanceWin(
 }
 
 ReactInstanceWin::~ReactInstanceWin() noexcept {
-#ifdef USE_FABRIC
-  if (m_bridgelessReactInstance && m_options.InspectorTarget) {
-    auto messageDispatchQueue =
-        Mso::React::MessageDispatchQueue(::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr);
-    messageDispatchQueue.runOnQueueSync([weakBridgelessReactInstance = std::weak_ptr(m_bridgelessReactInstance)]() {
-      if (auto bridgelessReactInstance = weakBridgelessReactInstance.lock()) {
-        bridgelessReactInstance->unregisterFromInspector();
-      }
-    });
-  }
-#endif
-
   std::scoped_lock lock{s_registryMutex};
   auto it = std::find(s_instanceRegistry.begin(), s_instanceRegistry.end(), this);
   if (it != s_instanceRegistry.end()) {
@@ -559,7 +549,7 @@ std::shared_ptr<facebook::react::DevSettings> ReactInstanceWin::CreateDevSetting
 
   devSettings->useRuntimeScheduler = useRuntimeScheduler;
 
-  devSettings->inspectorTarget = m_options.InspectorTarget;
+  devSettings->inspectorHostTarget = m_options.InspectorHostTarget;
 
   return devSettings;
 }
@@ -617,8 +607,9 @@ void SetJSThreadDescription() noexcept {
 void ReactInstanceWin::InitializeBridgeless() noexcept {
   InitUIQueue();
 
-  m_uiMessageThread.Exchange(std::make_shared<MessageDispatchQueue2>(
-      *m_uiQueue, Mso::MakeWeakMemberFunctor(this, &ReactInstanceWin::OnError)));
+  m_uiMessageThread.Exchange(
+      std::make_shared<MessageDispatchQueue2>(
+          *m_uiQueue, Mso::MakeWeakMemberFunctor(this, &ReactInstanceWin::OnError)));
 
   ReactPropertyBag(m_reactContext->Properties())
       .Set(
@@ -679,20 +670,13 @@ void ReactInstanceWin::InitializeBridgeless() noexcept {
                   devSettings, jsMessageThread, CreatePreparedScriptStore());
               auto jsRuntime = std::make_unique<Microsoft::ReactNative::HermesJSRuntime>(m_jsiRuntimeHolder);
               jsRuntime->getRuntime();
-              
-              // Check InspectorTarget before creating ReactInstance
-              if (m_options.InspectorTarget) {
-                OutputDebugStringA("ReactInstanceWin: InspectorTarget is NOT null\n");
-              } else {
-                OutputDebugStringA("ReactInstanceWin: InspectorTarget IS NULL\n");
-              }
-              
+
               m_bridgelessReactInstance = std::make_shared<facebook::react::ReactInstance>(
                   std::move(jsRuntime),
                   jsMessageThread,
                   timerManager,
                   jsErrorHandlingFunc,
-                  m_options.InspectorTarget);
+                  m_options.InspectorHostTarget);
 
               auto bufferedRuntimeExecutor = m_bridgelessReactInstance->getBufferedRuntimeExecutor();
               timerManager->setRuntimeExecutor(bufferedRuntimeExecutor);
@@ -714,10 +698,10 @@ void ReactInstanceWin::InitializeBridgeless() noexcept {
                 winrt::make<implementation::ReactContext>(Mso::Copy(m_reactContext)));
 
             facebook::react::ReactInstance::JSRuntimeFlags options;
-            
+
             // Add logging before initializeRuntime
             OutputDebugStringA("ReactInstanceWin: About to call initializeRuntime\n");
-            
+
             m_bridgelessReactInstance->initializeRuntime(
                 options,
                 [=, onCreated = m_options.OnInstanceCreated, reactContext = m_reactContext](
@@ -1114,6 +1098,17 @@ Mso::Future<void> ReactInstanceWin::Destroy() noexcept {
   if (m_bridgelessReactInstance) {
     if (auto jsMessageThread = m_jsMessageThread.Exchange(nullptr)) {
       jsMessageThread->runOnQueueSync([&]() noexcept {
+        // Unregister from inspector BEFORE shutting down JS thread
+        if (m_bridgelessReactInstance && m_options.InspectorHostTarget) {
+          Mso::React::MessageDispatchQueue messageDispatchQueue{
+              ::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr};
+          messageDispatchQueue.runOnQueueSync(
+              [weakBridgelessReactInstance = std::weak_ptr(m_bridgelessReactInstance)]() {
+                if (auto bridgelessReactInstance = weakBridgelessReactInstance.lock()) {
+                  bridgelessReactInstance->unregisterFromInspector();
+                }
+              });
+        }
         {
           // Release the JSI runtime
           std::scoped_lock lock{m_mutex};
@@ -1176,8 +1171,9 @@ void ReactInstanceWin::InitUIQueue() noexcept {
 }
 
 void ReactInstanceWin::InitUIMessageThread() noexcept {
-  m_uiMessageThread.Exchange(std::make_shared<MessageDispatchQueue2>(
-      *m_uiQueue, Mso::MakeWeakMemberFunctor(this, &ReactInstanceWin::OnError)));
+  m_uiMessageThread.Exchange(
+      std::make_shared<MessageDispatchQueue2>(
+          *m_uiQueue, Mso::MakeWeakMemberFunctor(this, &ReactInstanceWin::OnError)));
 
   auto batchingUIThread = Microsoft::ReactNative::MakeBatchingQueueThread(m_uiMessageThread.Load());
   m_batchingUIThread = batchingUIThread;

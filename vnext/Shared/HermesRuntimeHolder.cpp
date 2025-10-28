@@ -321,9 +321,9 @@ HermesRuntimeHolder::HermesRuntimeHolder(
       m_preparedScriptStore(std::move(preparedScriptStore)) {}
 
 HermesRuntimeHolder::~HermesRuntimeHolder() {
-  //if (m_runtime) {
-  //  CRASH_ON_ERROR(getHermesApi().jsr_delete_runtime(m_runtime));
-  //}
+  // if (m_runtime) {
+  //   CRASH_ON_ERROR(getHermesApi().jsr_delete_runtime(m_runtime));
+  // }
 }
 
 void HermesRuntimeHolder::initRuntime() noexcept {

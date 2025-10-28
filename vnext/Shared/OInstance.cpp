@@ -489,7 +489,7 @@ InstanceImpl::InstanceImpl(
   }
 
   m_innerInstance->initializeBridge(
-      std::move(callback), jsef, m_jsThread, m_moduleRegistry, m_devSettings->inspectorTarget);
+      std::move(callback), jsef, m_jsThread, m_moduleRegistry, m_devSettings->inspectorHostTarget);
 
   // For RuntimeScheduler to work properly, we need to install TurboModuleManager with RuntimeSchedulerCallbackInvoker.
   // To be able to do that, we need to be able to call m_innerInstance->getRuntimeExecutor(), which we can only do after
@@ -592,7 +592,7 @@ void InstanceImpl::loadBundleInternal(std::string &&jsBundleRelativePath, bool s
 }
 
 InstanceImpl::~InstanceImpl() {
-  if (m_devSettings->inspectorTarget) {
+  if (m_devSettings->inspectorHostTarget) {
     Mso::React::MessageDispatchQueue messageDispatchQueue{
         ::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr};
     messageDispatchQueue.runOnQueueSync([weakInnerInstance = std::weak_ptr(m_innerInstance)]() {

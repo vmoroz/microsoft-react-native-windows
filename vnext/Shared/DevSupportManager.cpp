@@ -287,6 +287,7 @@ void DevSupportManager::StopPollingLiveReload() {
   m_cancellation_token = true;
 }
 
+// TODO: (vmoroz) Use or delete this function
 void DevSupportManager::OpenDevTools(const std::string &bundleAppId) {
   winrt::Windows::Web::Http::Filters::HttpBaseProtocolFilter filter;
   filter.CacheControl().ReadBehavior(winrt::Windows::Web::Http::Filters::HttpCacheReadBehavior::NoCache);
