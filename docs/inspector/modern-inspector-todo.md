@@ -13,6 +13,11 @@ This document provides a concise checklist of tasks for completing modern inspec
 
 ### Inspector Infrastructure
 
+- [ ] ❌ Move inspector code from ReactNativeHost.cpp to ReactHost.cpp (RNH should be thin ABI layer)
+- [ ] ❌ Register inspector pages only when direct debugger is enabled for RNH
+- [ ] ❌ Handle inspector page registration/unregistration on reload when debugger enabled/disabled
+- [ ] ❌ Implement/fix debugger overlay when instance is paused in debugger
+- [ ] ❌ Remove old Hermes-specific inspector code in favor of modern inspector
 - [ ] ⚠️ Verify synchronous inspector registration before JS execution (bridgeless)
 - [ ] ⚠️ Verify synchronous inspector registration before JS execution (bridge-based)
 - [ ] ❌ Add bridge-based architecture support (pass InspectorTarget to Instance::initializeBridge)
@@ -144,16 +149,21 @@ This document provides a concise checklist of tasks for completing modern inspec
 ## Notes
 
 ### Critical Path Items (Must Do First)
-1. Verify synchronous inspector registration
-2. Fix conditional domain enablement (already done)
-3. Test basic debugging flow (breakpoints, console)
-4. Add bridge-based architecture support
+1. **Move inspector code from ReactNativeHost to ReactHost** (architectural cleanup)
+2. **Conditional inspector registration** (only when direct debugger enabled)
+3. **Handle debugger enable/disable on reload** (DevMenu scenario)
+4. Verify synchronous inspector registration
+5. Fix conditional domain enablement (already done)
+6. Test basic debugging flow (breakpoints, console)
+7. Add bridge-based architecture support
 
 ### High Priority (Do Soon)
-1. Add unique page descriptions for multi-instance
-2. Fix thread-safe cleanup in destructors
-3. Test bundled JS debugging
-4. Add console message support to Hermes ABI
+1. **Implement/fix debugger overlay** (blocked in debugger UI)
+2. **Remove old Hermes inspector code** (cleanup legacy code)
+3. Add unique page descriptions for multi-instance
+4. Fix thread-safe cleanup in destructors
+5. Test bundled JS debugging
+6. Add console message support to Hermes ABI
 
 ### Medium Priority
 1. Add profiling support to Hermes ABI
