@@ -13,7 +13,7 @@ This document provides a concise checklist of tasks for completing modern inspec
 
 ### Inspector Infrastructure
 
-- [ ] ❌ Move inspector code from ReactNativeHost.cpp to ReactHost.cpp (RNH should be thin ABI layer)
+- [ ] ❌ Move the most of inspector code from ReactNativeHost.cpp to ReactHost.cpp (RNH should be a thin ABI layer)
 - [ ] ❌ Register inspector pages only when direct debugger is enabled for RNH
 - [ ] ❌ Handle inspector page registration/unregistration on reload when debugger enabled/disabled
 - [ ] ❌ Implement/fix debugger overlay when instance is paused in debugger
