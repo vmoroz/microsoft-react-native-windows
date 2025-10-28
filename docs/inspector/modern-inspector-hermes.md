@@ -221,58 +221,118 @@ void HostTarget::unregisterInstance(InstanceTarget& instance) {
 }
 ```
 
-### Windows RNH Reload Sequence
+### Windows RNW Integration - Key Insight
 
-**Current Windows behavior** (from your description):
+**CRITICAL**: The cross-platform `ReactInstance` (bridgeless) and `Instance` (legacy bridge) code from `ReactCommon` **ALREADY HANDLES** all inspector registration and cleanup internally. Windows code should **NOT** manually register/unregister InstanceTarget or RuntimeTarget.
 
-1. **Reload triggered**
-2. `HermesRuntimeHolder` destroyed
-3. `HermesRuntime` destroyed
-4. **Problem**: `RuntimeTarget` may still exist, holding reference to destroyed runtime
-5. New `HermesRuntimeHolder` created
-6. New `HermesRuntime` created
-7. New `RuntimeTarget` should be created
+#### What React Native's ReactInstance Does Automatically
 
-**Correct sequence** (matches React Native bridgeless and legacy):
+From `ReactCommon/react/runtime/ReactInstance.cpp`:
 
-1. **Before destroying runtime**:
-   ```cpp
-   // In ReactInstanceWin::Uninitialize() or similar
-   if (m_inspectorTarget && m_runtimeInspectorTarget) {
-     m_inspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
-     m_runtimeInspectorTarget = nullptr;
-   }
+```cpp
+// ReactInstance constructor
+ReactInstance::ReactInstance(
+    std::unique_ptr<JSRuntime> runtime,
+    std::shared_ptr<MessageQueueThread> jsMessageThread,
+    std::shared_ptr<TimerManager> timerManager,
+    JsErrorHandler::JsErrorHandlingFunc jsErrorHandlingFunc,
+    jsinspector_modern::HostTarget* parentInspectorTarget)  // <-- Pass HostTarget here
+    : ... {
+  // ReactInstance will register itself during initializeRuntime()
+}
+
+// During initializeRuntime() - called by Windows code
+void ReactInstance::initializeRuntime(...) {
+  if (parentInspectorTarget_) {
+    parentInspectorTarget_->execute([this, ...](HostTarget& hostTarget) {
+      // ReactInstance registers ITSELF as InstanceTarget
+      inspectorTarget_ = &hostTarget.registerInstance(*this);
+      
+      // ReactInstance registers the RuntimeTarget
+      runtimeInspectorTarget_ = &inspectorTarget_->registerRuntime(
+          runtime_->getRuntimeTargetDelegate(),
+          runtimeExecutor);
+    });
+  }
+}
+
+// Before destruction - called by Windows code
+void ReactInstance::unregisterFromInspector() {
+  if (inspectorTarget_) {
+    // ReactInstance unregisters RuntimeTarget
+    inspectorTarget_->unregisterRuntime(*runtimeInspectorTarget_);
+    
+    // ReactInstance unregisters InstanceTarget
+    parentInspectorTarget_->unregisterInstance(*inspectorTarget_);
+    
+    inspectorTarget_ = nullptr;
+  }
+}
+```
+
+#### What Windows ReactInstanceWin Should Do
+
+From `ReactInstanceWin.cpp` - **this is already correct**:
+
+```cpp
+// In InitializeBridgeless()
+void ReactInstanceWin::InitializeBridgeless() noexcept {
+  // 1. Create ReactInstance and pass HostTarget pointer
+  m_bridgelessReactInstance = std::make_shared<facebook::react::ReactInstance>(
+      std::move(jsRuntime),
+      jsMessageThread,
+      timerManager,
+      jsErrorHandlingFunc,
+      m_options.InspectorTarget);  // <-- Pass HostTarget*, ReactInstance handles rest
+  
+  // 2. Call initializeRuntime() - this triggers inspector registration internally
+  m_bridgelessReactInstance->initializeRuntime(options, callback);
+}
+
+// In ~ReactInstanceWin()
+ReactInstanceWin::~ReactInstanceWin() noexcept {
+  // 3. Call unregisterFromInspector() BEFORE destroying ReactInstance
+  if (m_bridgelessReactInstance && m_options.InspectorTarget) {
+    auto messageDispatchQueue =
+        Mso::React::MessageDispatchQueue(
+            ::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr);
+    messageDispatchQueue.runOnQueueSync(
+        [weakBridgelessReactInstance = std::weak_ptr(m_bridgelessReactInstance)]() {
+          if (auto bridgelessReactInstance = weakBridgelessReactInstance.lock()) {
+            // This cleans up InstanceTarget and RuntimeTarget
+            bridgelessReactInstance->unregisterFromInspector();
+          }
+        });
+  }
+  // 4. Now safe to destroy ReactInstance
+}
+```
+
+#### Windows RNW Reload Sequence
+
+**What RNW should do** (and already does correctly):
+
+1. **Call `unregisterFromInspector()`** on the old ReactInstance
+   - This internally unregisters both RuntimeTarget and InstanceTarget
+   - Must be done on inspector thread (ReactInspectorThread)
+
+2. **Destroy old ReactInstance**
+   - This destroys HermesRuntimeHolder, HermesRuntime, etc.
+
+3. **Create new ReactInstance** with HostTarget pointer
+   - Pass the **same** HostTarget pointer (it survives reloads)
    
-   // IMPORTANT: Also unregister the instance
-   if (m_parentHostTarget && m_inspectorTarget) {
-     m_parentHostTarget->unregisterInstance(*m_inspectorTarget);
-     m_inspectorTarget = nullptr;
-   }
-   ```
+4. **Call `initializeRuntime()`** on new ReactInstance
+   - This internally registers new InstanceTarget and new RuntimeTarget
 
-2. **Destroy old runtime**:
-   ```cpp
-   m_hermesRuntimeHolder.reset();  // Destroys Hermes runtime
-   ```
+**What RNW should NOT do**:
+- ❌ Manually call `hostTarget.registerInstance()`
+- ❌ Manually call `instanceTarget.registerRuntime()`  
+- ❌ Manually call `instanceTarget.unregisterRuntime()`
+- ❌ Manually call `hostTarget.unregisterInstance()`
+- ❌ Try to manage InstanceTarget or RuntimeTarget directly
 
-3. **Create new runtime**:
-   ```cpp
-   m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
-   ```
-
-4. **Re-register instance and runtime**:
-   ```cpp
-   if (m_parentHostTarget) {
-     // Register NEW InstanceTarget
-     m_inspectorTarget = &m_parentHostTarget->registerInstance(*this);
-     
-     // Register NEW RuntimeTarget
-     auto& newRuntimeTarget = m_inspectorTarget->registerRuntime(
-         m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
-         runtimeExecutor);
-     m_runtimeInspectorTarget = &newRuntimeTarget;
-   }
-   ```
+**The cross-platform code handles everything internally!**
 
 ### Critical Constraint from React Native
 
@@ -297,9 +357,7 @@ RuntimeTarget::~RuntimeTarget() {
 
 ### Windows HermesRuntimeHolder Integration
 
-**Current challenge**: `HermesRuntimeHolder` is recreated on reload, but `RuntimeTarget` needs careful coordination.
-
-**Recommended pattern**:
+**Key Principle**: HermesRuntimeHolder only needs to provide the `RuntimeTargetDelegate`. The cross-platform `ReactInstance` handles all inspector registration.
 
 ```cpp
 class HermesRuntimeHolder {
@@ -308,21 +366,20 @@ class HermesRuntimeHolder {
     // Create Hermes runtime
     m_hermesRuntime = makeHermesRuntime(...);
     
-    // Create runtime target delegate
+    // Create runtime target delegate for inspector
     m_runtimeTargetDelegate = std::make_shared<HermesRuntimeTargetDelegate>(
         m_hermesRuntime);
   }
   
   ~HermesRuntimeHolder() {
-    // RuntimeTarget will be unregistered by ReactInstanceWin BEFORE
-    // HermesRuntimeHolder is destroyed
-    
-    // Destroy in reverse order
+    // ReactInstance will have already unregistered everything
+    // Just destroy in reverse order
     m_runtimeTargetDelegate.reset();
     m_hermesRuntime.reset();
   }
   
-  HermesRuntimeTargetDelegate& getRuntimeTargetDelegate() {
+  // Provide delegate to ReactInstance via JSRuntime interface
+  RuntimeTargetDelegate& getRuntimeTargetDelegate() {
     return *m_runtimeTargetDelegate;
   }
   
@@ -332,80 +389,32 @@ class HermesRuntimeHolder {
 };
 ```
 
-**In ReactInstanceWin**:
+**ReactInstanceWin doesn't manually manage inspector targets**:
+- ✅ Creates HostTarget once (in ReactHost or similar)
+- ✅ Passes HostTarget* to ReactInstance constructor
+- ✅ Calls `unregisterFromInspector()` before destroying ReactInstance
+- ❌ Does NOT manually register/unregister InstanceTarget or RuntimeTarget
 
-```cpp
-class ReactInstanceWin {
- public:
-  void Initialize() {
-    // Create runtime holder
-    m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
-    
-    // Register with inspector
-    if (m_instanceInspectorTarget) {
-      m_runtimeInspectorTarget = &m_instanceInspectorTarget->registerRuntime(
-          m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
-          m_runtimeExecutor);
-    }
-  }
-  
-  void Reload() {
-    // CRITICAL: Unregister BEFORE destroying runtime
-    if (m_instanceInspectorTarget && m_runtimeInspectorTarget) {
-      m_instanceInspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
-      m_runtimeInspectorTarget = nullptr;
-    }
-    
-    // Now safe to destroy old runtime
-    m_hermesRuntimeHolder.reset();
-    
-    // Create new runtime
-    m_hermesRuntimeHolder = std::make_shared<HermesRuntimeHolder>(...);
-    
-    // Register new runtime
-    if (m_instanceInspectorTarget) {
-      m_runtimeInspectorTarget = &m_instanceInspectorTarget->registerRuntime(
-          m_hermesRuntimeHolder->getRuntimeTargetDelegate(),
-          m_runtimeExecutor);
-    }
-  }
-  
-  ~ReactInstanceWin() {
-    // Unregister runtime before destruction
-    if (m_instanceInspectorTarget && m_runtimeInspectorTarget) {
-      m_instanceInspectorTarget->unregisterRuntime(*m_runtimeInspectorTarget);
-    }
-    
-    // Now safe to destroy
-    m_hermesRuntimeHolder.reset();
-  }
-  
- private:
-  std::shared_ptr<HermesRuntimeHolder> m_hermesRuntimeHolder;
-  InstanceTarget* m_instanceInspectorTarget{nullptr};  // Not owned
-  RuntimeTarget* m_runtimeInspectorTarget{nullptr};    // Not owned
-};
-```
+### Summary: Lifetime Expectations and Ownership
 
-### Summary: Lifetime Expectations
+| Component | Lifetime Scope | Recreated on Reload? | Managed By | Windows Code Responsibility |
+|-----------|---------------|---------------------|-----------|----------------------------|
+| **ReactNativeHost (RNW)** | Application lifetime | ❌ No | Windows code | Create once, owns HostTarget |
+| **HostTarget** | ReactNativeHost lifetime | ❌ No | Windows code | Create once in ReactHost |
+| **InstanceTarget** | Per-load (reload cycles) | ✅ Yes | **ReactInstance** (RN) | None - ReactInstance handles it |
+| **ReactInstance (RN)** | Per-load (reload cycles) | ✅ Yes | Windows code | Create/destroy, pass HostTarget* |
+| **HermesRuntimeHolder (RNW)** | Per-load (reload cycles) | ✅ Yes | ReactInstance | Provide RuntimeTargetDelegate |
+| **HermesRuntime** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder | Created by holder |
+| **HermesRuntimeTargetDelegate** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder | Created by holder |
+| **RuntimeTarget** | Per-load (reload cycles) | ✅ Yes | **ReactInstance** (RN) | None - ReactInstance handles it |
+| **RuntimeAgent** | Per debug session | ✅ Yes (reconnects) | Session | None - session handles it |
+| **HermesRuntimeAgentDelegate** | Per debug session | ✅ Yes (reconnects) | RuntimeAgent | None - agent handles it |
 
-| Component | Lifetime Scope | Recreated on Reload? | Owner |
-|-----------|---------------|---------------------|--------|
-| **ReactNativeHost** | Application lifetime | ❌ No | Application |
-| **HostTarget** | ReactNativeHost lifetime | ❌ No | ReactNativeHost |
-| **InstanceTarget** | Per-load (reload cycles) | ✅ Yes | HostTarget |
-| **ReactInstance** | Per-load (reload cycles) | ✅ Yes | ReactNativeHost |
-| **HermesRuntimeHolder** | Per-load (reload cycles) | ✅ Yes | ReactInstance |
-| **HermesRuntime** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder |
-| **HermesRuntimeTargetDelegate** | Per-load (reload cycles) | ✅ Yes | HermesRuntimeHolder |
-| **RuntimeTarget** | Per-load (reload cycles) | ✅ Yes | InstanceTarget |
-| **RuntimeAgent** | Per debug session | ✅ Yes (session reconnects) | Session |
-| **HermesRuntimeAgentDelegate** | Per debug session | ✅ Yes (session reconnects) | RuntimeAgent |
-
-**Key Principle**: 
-- Components that wrap the JS runtime (`HermesRuntimeHolder`, `RuntimeTarget`, delegates) are **recreated on each reload**
-- Components that represent the host/instance level survive reloads
-- Proper `unregisterRuntime()` call is **mandatory** before destroying the runtime
+**Key Principles**: 
+1. **Windows code manages**: HostTarget creation, ReactInstance lifecycle, HermesRuntimeHolder
+2. **ReactInstance manages**: InstanceTarget and RuntimeTarget registration/unregistration
+3. **Windows must call**: `ReactInstance::unregisterFromInspector()` before destroying ReactInstance
+4. **Windows must NOT**: Manually register/unregister InstanceTarget or RuntimeTarget
 
 ## FrontendChannel Architecture
 
