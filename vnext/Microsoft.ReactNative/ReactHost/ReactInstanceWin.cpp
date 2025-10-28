@@ -671,7 +671,7 @@ void ReactInstanceWin::InitializeBridgeless() noexcept {
               };
 
               if (devSettings->useDirectDebugger) {
-                ::Microsoft::ReactNative::GetSharedDevManager()->EnsureHermesInspector(
+                ::Microsoft::ReactNative::GetSharedDevManager()->EnsureInspectorPackagerConnection(
                     devSettings->sourceBundleHost, devSettings->sourceBundlePort, devSettings->bundleAppId);
               }
 

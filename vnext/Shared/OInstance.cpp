@@ -114,7 +114,6 @@ void LoadRemoteUrlScript(
       hermesBytecodeVersion);
 
   if (!success) {
-    devManager->UpdateBundleStatus(false, -1);
     devSettings->errorCallback(jsBundleString);
     return;
   }
@@ -122,7 +121,6 @@ void LoadRemoteUrlScript(
   int64_t currentTimeInMilliSeconds =
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
           .count();
-  devManager->UpdateBundleStatus(true, currentTimeInMilliSeconds);
 
   auto bundleUrl = facebook::react::DevServerHelper::get_BundleUrl(
       devSettings->sourceBundleHost,
@@ -348,20 +346,6 @@ void InstanceImpl::SetInError() noexcept {
   m_isInError = true;
 }
 
-namespace {
-bool shouldStartHermesInspector(DevSettings &devSettings) {
-  bool isHermes =
-      ((devSettings.jsiEngineOverride == JSIEngineOverride::Hermes) ||
-       (devSettings.jsiEngineOverride == JSIEngineOverride::Default && devSettings.jsiRuntimeHolder &&
-        devSettings.jsiRuntimeHolder->getRuntimeType() == facebook::react::JSIEngineOverride::Hermes));
-
-  if (isHermes && devSettings.useDirectDebugger && !devSettings.useWebDebugger)
-    return true;
-  else
-    return false;
-}
-} // namespace
-
 InstanceImpl::InstanceImpl(
     std::shared_ptr<Instance> &&instance,
     std::string &&jsBundleBasePath,
@@ -392,8 +376,8 @@ InstanceImpl::InstanceImpl(
   facebook::react::tracing::initializeETW();
 #endif
 
-  if (shouldStartHermesInspector(*m_devSettings)) {
-    m_devManager->EnsureHermesInspector(
+  if (m_devSettings->useDirectDebugger) {
+    m_devManager->EnsureInspectorPackagerConnection(
         m_devSettings->sourceBundleHost, m_devSettings->sourceBundlePort, m_devSettings->bundleAppId);
   }
 
@@ -609,18 +593,15 @@ void InstanceImpl::loadBundleInternal(std::string &&jsBundleRelativePath, bool s
 
 InstanceImpl::~InstanceImpl() {
   if (m_devSettings->inspectorTarget) {
-    auto messageDispatchQueue =
-        Mso::React::MessageDispatchQueue(::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr);
+    Mso::React::MessageDispatchQueue messageDispatchQueue{
+        ::Microsoft::ReactNative::ReactInspectorThread::Instance(), nullptr};
     messageDispatchQueue.runOnQueueSync([weakInnerInstance = std::weak_ptr(m_innerInstance)]() {
-      if (auto innerInstance = weakInnerInstance.lock()) {
+      if (std::shared_ptr<facebook::react::Instance> innerInstance = weakInnerInstance.lock()) {
         innerInstance->unregisterFromInspector();
       }
     });
   }
 
-  if (shouldStartHermesInspector(*m_devSettings) && m_devSettings->jsiRuntimeHolder) {
-    m_devSettings->jsiRuntimeHolder->teardown();
-  }
   m_nativeQueue->quitSynchronous();
 }
 

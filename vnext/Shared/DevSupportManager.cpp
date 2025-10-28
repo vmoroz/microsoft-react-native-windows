@@ -111,8 +111,9 @@ void LaunchDevTools(const facebook::react::DevSettings &settings) {
   filter.CacheControl().ReadBehavior(winrt::Windows::Web::Http::Filters::HttpCacheReadBehavior::NoCache);
   winrt::Windows::Web::Http::HttpClient httpClient(filter);
   winrt::Windows::Foundation::Uri uri(
-      Microsoft::Common::Unicode::Utf8ToUtf16(facebook::react::DevServerHelper::get_LaunchDevToolsCommandUrl(
-          settings.sourceBundleHost, settings.sourceBundlePort)));
+      Microsoft::Common::Unicode::Utf8ToUtf16(
+          facebook::react::DevServerHelper::get_LaunchDevToolsCommandUrl(
+              settings.sourceBundleHost, settings.sourceBundlePort)));
 
   winrt::Windows::Web::Http::HttpRequestMessage request(winrt::Windows::Web::Http::HttpMethod::Get(), uri);
   httpClient.SendRequestAsync(request);
@@ -292,16 +293,17 @@ void DevSupportManager::OpenDevTools(const std::string &bundleAppId) {
   winrt::Windows::Web::Http::HttpClient httpClient(filter);
   // TODO: Use currently configured dev server host
   winrt::Windows::Foundation::Uri uri(
-      Microsoft::Common::Unicode::Utf8ToUtf16(facebook::react::DevServerHelper::get_OpenDebuggerUrl(
-          std::string{DevServerHelper::DefaultPackagerHost},
-          DevServerHelper::DefaultPackagerPort,
-          GetDeviceId(GetPackageName(bundleAppId)))));
+      Microsoft::Common::Unicode::Utf8ToUtf16(
+          facebook::react::DevServerHelper::get_OpenDebuggerUrl(
+              std::string{DevServerHelper::DefaultPackagerHost},
+              DevServerHelper::DefaultPackagerPort,
+              GetDeviceId(GetPackageName(bundleAppId)))));
 
   winrt::Windows::Web::Http::HttpRequestMessage request(winrt::Windows::Web::Http::HttpMethod::Post(), uri);
   httpClient.SendRequestAsync(request);
 }
 
-void DevSupportManager::EnsureHermesInspector(
+void DevSupportManager::EnsureInspectorPackagerConnection(
     [[maybe_unused]] const std::string &packagerHost,
     [[maybe_unused]] const uint16_t packagerPort,
     [[maybe_unused]] const std::string &bundleAppId) noexcept {
@@ -314,27 +316,17 @@ void DevSupportManager::EnsureHermesInspector(
       deviceName = winrt::to_string(hostNames.First().Current().DisplayName());
     }
 
-    const auto deviceId = GetDeviceId(packageName);
-    auto inspectorUrl = facebook::react::DevServerHelper::get_InspectorDeviceUrl(
+    std::string deviceId = GetDeviceId(packageName);
+    std::string inspectorUrl = facebook::react::DevServerHelper::get_InspectorDeviceUrl(
         packagerHost, packagerPort, deviceName, packageName, deviceId);
-    auto &inspectorFlags = jsinspector_modern::InspectorFlags::getInstance();
-    if (inspectorFlags.getFuseboxEnabled()) {
-      m_fuseboxInspectorPackagerConnection = std::make_unique<jsinspector_modern::InspectorPackagerConnection>(
-          inspectorUrl,
-          deviceName,
-          packageName,
-          std::make_unique<Microsoft::ReactNative::ReactInspectorPackagerConnectionDelegate>());
-      m_fuseboxInspectorPackagerConnection->connect();
-    } else {
-      m_inspectorPackagerConnection =
-          std::make_shared<InspectorPackagerConnection>(std::move(inspectorUrl), m_BundleStatusProvider);
-      m_inspectorPackagerConnection->connectAsync();
-    }
+    jsinspector_modern::InspectorFlags &inspectorFlags = jsinspector_modern::InspectorFlags::getInstance();
+    m_inspectorPackagerConnection = std::make_unique<jsinspector_modern::InspectorPackagerConnection>(
+        inspectorUrl,
+        deviceName,
+        packageName,
+        std::make_unique<Microsoft::ReactNative::ReactInspectorPackagerConnectionDelegate>());
+    m_inspectorPackagerConnection->connect();
   });
-}
-
-void DevSupportManager::UpdateBundleStatus(bool isLastDownloadSuccess, int64_t updateTimestamp) noexcept {
-  m_BundleStatusProvider->updateBundleStatus(isLastDownloadSuccess, updateTimestamp);
 }
 
 std::pair<std::string, bool> GetJavaScriptFromServer(

@@ -220,9 +220,9 @@ struct ReactOptions {
   //! Base path of the SDX. The absolute path of the SDX can be constructed from this and the Identity.
   std::string BundleRootPath;
 
-  //! Javascript Bundles
-  //! This List includes both Platform and User Javascript Bundles
-  //! Bundles are loaded into Javascript engine in the same order
+  //! JavaScript Bundles
+  //! This List includes both Platform and User JavaScript Bundles
+  //! Bundles are loaded into JavaScript engine in the same order
   //! as they are specified in this list.
   std::vector<Mso::CntPtr<IJSBundle>> JSBundles;
 

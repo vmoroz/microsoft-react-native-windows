@@ -388,10 +388,6 @@ void HermesRuntimeHolder::crashHandler(int fileDescriptor) noexcept {
   CRASH_ON_ERROR(getHermesApi().hermes_dump_crash_data(m_runtime, fileDescriptor));
 }
 
-void HermesRuntimeHolder::teardown() noexcept {
-  // TODO: (@vmoroz) Implement
-}
-
 std::shared_ptr<HermesRuntimeHolder> HermesRuntimeHolder::loadFrom(
     React::ReactPropertyBag const &propertyBag) noexcept {
   return *(propertyBag.Get(HermesRuntimeHolderProperty()));

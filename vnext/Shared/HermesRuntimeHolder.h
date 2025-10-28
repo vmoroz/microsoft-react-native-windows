@@ -181,7 +181,6 @@ class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
   std::shared_ptr<facebook::jsi::Runtime> getRuntime() noexcept override;
   facebook::react::JSIEngineOverride getRuntimeType() noexcept override;
   void crashHandler(int fileDescriptor) noexcept override;
-  void teardown() noexcept override;
 
  public:
   HermesRuntimeHolder(
