@@ -67,9 +67,10 @@ void ReactInspectorWebSocket::send(std::string_view message) {
 }
 
 ReactInspectorWebSocket::~ReactInspectorWebSocket() {
-  std::string reason{"Explicit close"};
-  m_packagerWebSocketConnection->Close(
-      Microsoft::React::Networking::WinRTWebSocketResource::CloseCode::GoingAway, reason);
+  // Avoiding async Close() during shutdown OS would cleanup the socket on process exit
+  // std::string reason{"Explicit close"};
+  // m_packagerWebSocketConnection->Close(
+  //    Microsoft::React::Networking::WinRTWebSocketResource::CloseCode::GoingAway, reason);
 }
 
 } // namespace
