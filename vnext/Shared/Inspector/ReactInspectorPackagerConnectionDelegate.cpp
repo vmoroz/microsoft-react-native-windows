@@ -34,6 +34,13 @@ ReactInspectorWebSocket::ReactInspectorWebSocket(
   m_packagerWebSocketConnection =
       std::make_shared<Microsoft::React::Networking::WinRTWebSocketResource>(std::move(certExceptions));
 
+  m_packagerWebSocketConnection->SetOnConnect([delegate]() {
+    ReactInspectorThread::Instance().InvokeElsePost([delegate]() {
+      if (const auto strongDelegate = delegate.lock()) {
+        strongDelegate->didOpen();
+      }
+    });
+  });
   m_packagerWebSocketConnection->SetOnMessage([delegate](auto &&, const std::string &message, bool isBinary) {
     ReactInspectorThread::Instance().InvokeElsePost([delegate, message]() {
       if (const auto strongDelegate = delegate.lock()) {
@@ -67,10 +74,11 @@ void ReactInspectorWebSocket::send(std::string_view message) {
 }
 
 ReactInspectorWebSocket::~ReactInspectorWebSocket() {
-  // Avoiding async Close() during shutdown OS would cleanup the socket on process exit
-  // std::string reason{"Explicit close"};
-  // m_packagerWebSocketConnection->Close(
-  //    Microsoft::React::Networking::WinRTWebSocketResource::CloseCode::GoingAway, reason);
+  if (m_packagerWebSocketConnection) {
+    std::string reason{"Inspector connection closed"};
+    m_packagerWebSocketConnection->Close(
+        Microsoft::React::Networking::WinRTWebSocketResource::CloseCode::GoingAway, reason);
+  }
 }
 
 } // namespace
