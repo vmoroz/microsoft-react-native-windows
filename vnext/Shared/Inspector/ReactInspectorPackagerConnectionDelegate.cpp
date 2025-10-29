@@ -80,11 +80,9 @@ void ReactInspectorWebSocket::send(std::string_view message) {
 }
 
 ReactInspectorWebSocket::~ReactInspectorWebSocket() {
-  if (m_packagerWebSocketConnection) {
-    std::string reason{"Inspector connection closed"};
-    m_packagerWebSocketConnection->Close(
-        Microsoft::React::Networking::WinRTWebSocketResource::CloseCode::GoingAway, reason);
-  }
+  // Don't close WebSocket during shutdown - the OS will clean it up
+  // Attempting to close async during DLL unload causes thread pool failures
+  // The connection will be terminated when the process exits anyway
 }
 
 } // namespace
