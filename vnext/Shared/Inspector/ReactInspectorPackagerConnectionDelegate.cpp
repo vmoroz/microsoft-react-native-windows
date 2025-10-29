@@ -23,6 +23,7 @@ class ReactInspectorWebSocket : public facebook::react::jsinspector_modern::IWeb
  private:
   std::shared_ptr<Microsoft::React::Networking::WinRTWebSocketResource> m_packagerWebSocketConnection;
   std::weak_ptr<facebook::react::jsinspector_modern::IWebSocketDelegate> m_weakDelegate;
+  std::atomic<bool> m_didConnect{false};
 };
 
 ReactInspectorWebSocket::ReactInspectorWebSocket(
@@ -34,8 +35,9 @@ ReactInspectorWebSocket::ReactInspectorWebSocket(
   m_packagerWebSocketConnection =
       std::make_shared<Microsoft::React::Networking::WinRTWebSocketResource>(std::move(certExceptions));
 
-  m_packagerWebSocketConnection->SetOnConnect([delegate]() {
-    ReactInspectorThread::Instance().InvokeElsePost([delegate]() {
+  m_packagerWebSocketConnection->SetOnConnect([this, delegate]() {
+    ReactInspectorThread::Instance().InvokeElsePost([this, delegate]() {
+      m_didConnect = true;
       if (const auto strongDelegate = delegate.lock()) {
         strongDelegate->didOpen();
       }
@@ -56,10 +58,14 @@ ReactInspectorWebSocket::ReactInspectorWebSocket(
           }
         });
       });
-  m_packagerWebSocketConnection->SetOnClose([delegate](auto &&...) {
-    ReactInspectorThread::Instance().InvokeElsePost([delegate]() {
-      if (const auto strongDelegate = delegate.lock()) {
-        strongDelegate->didClose();
+  m_packagerWebSocketConnection->SetOnClose([this, delegate](auto &&...) {
+    ReactInspectorThread::Instance().InvokeElsePost([this, delegate]() {
+      // Only call didClose() if we successfully connected first
+      // This prevents didClose() from being called during failed connection attempts
+      if (m_didConnect) {
+        if (const auto strongDelegate = delegate.lock()) {
+          strongDelegate->didClose();
+        }
       }
     });
   });
