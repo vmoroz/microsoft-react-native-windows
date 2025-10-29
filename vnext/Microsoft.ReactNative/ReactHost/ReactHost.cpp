@@ -502,11 +502,15 @@ Mso::Future<void> ReactHost::LoadInQueue(ReactOptions &&options) noexcept {
     return Mso::MakeCanceledFuture();
   }
 
+  // Start or stop inspector page if needed.
+  // Make sure to update the both copies of options.
   if (IsInspectable()) {
     AddInspectorPage();
+    options.InspectorHostTarget = m_inspectorHostTarget.get();
     m_options.Load().InspectorHostTarget = m_inspectorHostTarget.get();
   } else {
     RemoveInspectorPage();
+    options.InspectorHostTarget = nullptr;
     m_options.Load().InspectorHostTarget = nullptr;
   }
 
