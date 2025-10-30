@@ -49,25 +49,24 @@ HermesRuntimeAgentDelegate::HermesRuntimeAgentDelegate(
     hermes_runtime runtime,
     HermesRuntimeTargetDelegate &runtimeTargetDelegate,
     facebook::react::RuntimeExecutor runtimeExecutor)
-    : hermesCdpAgent_(
-          HermesInspectorApi::createCdpAgent(
-              runtimeTargetDelegate.getCdpDebugApi(),
-              executionContextDescription.id,
-              // Adapt std::function<void(std::function<void(jsi::Runtime& runtime)>&& callback)>
-              // to hermes_enqueue_runtime_task_functor
-              AsFunctor<hermes_enqueue_runtime_task_functor>(
-                  [runtimeExecutor = std::move(runtimeExecutor), runtime](hermes_run_runtime_task_functor runtimeTask) {
-                    // Adapt std::function<void(jsi::Runtime& runtime)> to hermes_runtime_task_functor
-                    runtimeExecutor(
-                        [runtime, fn = std::make_shared<FunctorWrapper<hermes_run_runtime_task_functor>>(runtimeTask)](
-                            facebook::jsi::Runtime &rt) { (*fn)(runtime); });
-                  }),
-              // Adapt void(const char *json_utf8, size_t json_size) to std::function<void(std::string_view)>
-              AsFunctor<hermes_enqueue_frontend_message_functor>(
-                  [frontendChannel = std::move(frontendChannel)](const char *json_utf8, size_t json_size) {
-                    frontendChannel(std::string_view(json_utf8, json_size));
-                  }),
-              HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()).release())) {
+    : hermesCdpAgent_(HermesInspectorApi::createCdpAgent(
+          runtimeTargetDelegate.getCdpDebugApi(),
+          executionContextDescription.id,
+          // Adapt std::function<void(std::function<void(jsi::Runtime& runtime)>&& callback)>
+          // to hermes_enqueue_runtime_task_functor
+          AsFunctor<hermes_enqueue_runtime_task_functor>(
+              [runtimeExecutor = std::move(runtimeExecutor), runtime](hermes_run_runtime_task_functor runtimeTask) {
+                // Adapt std::function<void(jsi::Runtime& runtime)> to hermes_runtime_task_functor
+                runtimeExecutor(
+                    [runtime, fn = std::make_shared<FunctorWrapper<hermes_run_runtime_task_functor>>(runtimeTask)](
+                        facebook::jsi::Runtime &rt) { (*fn)(runtime); });
+              }),
+          // Adapt void(const char *json_utf8, size_t json_size) to std::function<void(std::string_view)>
+          AsFunctor<hermes_enqueue_frontend_message_functor>(
+              [frontendChannel = std::move(frontendChannel)](const char *json_utf8, size_t json_size) {
+                frontendChannel(std::string_view(json_utf8, json_size));
+              }),
+          HermesStateWrapper::unwrapDestructively(previouslyExportedState.get()).release())) {
   // Enable domains conditionally based on session state
   // This matches the iOS/Android implementation pattern:
   // Domains are enabled in response to Chrome DevTools sending Runtime.enable/Debugger.enable
