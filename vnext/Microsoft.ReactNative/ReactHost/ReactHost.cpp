@@ -659,8 +659,8 @@ void ReactHost::RemoveInspectorPage() noexcept {
 
 void ReactHost::OnDebuggerResume() noexcept {
   // TODO: (vmoroz) implement
-  //std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
-  //if (inspectorPageId.has_value()) {
+  // std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
+  // if (inspectorPageId.has_value()) {
   //  ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
   //      [weakInspectorHost = std::weak_ptr(m_inspectorHost)]() {
   //        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {

@@ -30,7 +30,7 @@ namespace Microsoft::ReactNative {
  */
 class HermesRuntimeTargetDelegate : public facebook::react::jsinspector_modern::RuntimeTargetDelegate {
  public:
-  explicit HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder>&& hermesRuntimeHolder);
+  explicit HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder> &&hermesRuntimeHolder);
 
   ~HermesRuntimeTargetDelegate() override;
 

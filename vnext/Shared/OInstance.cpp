@@ -385,9 +385,8 @@ InstanceImpl::InstanceImpl(
 
   // Add app provided modules.
   for (auto &cxxModule : cxxModules) {
-    modules.push_back(
-        std::make_unique<CxxNativeModule>(
-            m_innerInstance, move(std::get<0>(cxxModule)), move(std::get<1>(cxxModule)), move(std::get<2>(cxxModule))));
+    modules.push_back(std::make_unique<CxxNativeModule>(
+        m_innerInstance, move(std::get<0>(cxxModule)), move(std::get<1>(cxxModule)), move(std::get<2>(cxxModule))));
   }
   m_moduleRegistry = std::make_shared<facebook::react::ModuleRegistry>(std::move(modules));
 
