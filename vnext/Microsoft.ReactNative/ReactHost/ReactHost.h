@@ -91,6 +91,7 @@ class ReactHost final : public Mso::ActiveObject<IReactHost> {
   void RemoveInspectorPage() noexcept;
 
  private:
+  friend class ReactInspectorHostTargetDelegate;
   mutable std::mutex m_mutex;
   const Mso::InvokeElsePostExecutor m_executor{Queue()};
   const Mso::ActiveReadableField<Mso::CntPtr<AsyncActionQueue>> m_actionQueue{

@@ -8,6 +8,7 @@
 
 #include <CppRuntimeOptions.h>
 
+#include <jsinspector-modern/HostCommand.h>
 #include <jsinspector-modern/InspectorFlags.h>
 #include <react/featureflags/ReactNativeFeatureFlags.h>
 #include <react/featureflags/ReactNativeFeatureFlagsDefaults.h>
@@ -340,19 +341,17 @@ class ReactInspectorHostTargetDelegate : public jsinspector_modern::HostTargetDe
   void onSetPausedInDebuggerMessage(
       jsinspector_modern::HostTargetDelegate::OverlaySetPausedInDebuggerMessageRequest const &request) override {
     if (Mso::CntPtr<ReactHost> reactHost = m_reactHost.GetStrongPtr()) {
-      // TODO: (vmoroz) Implement
-      /*    if (!request.message.has_value()) {
-            ::Microsoft::ReactNative::DebuggerNotifications::OnShowDebuggerPausedOverlay(
-                instanceSettings.Notifications(), request.message.value(), [weakThis = weak_from_this()]() {
-                  if (auto strongThis = weakThis.lock()) {
-                    if (auto reactNativeHost = strongThis->m_reactNativeHost.get()) {
-                      winrt::get_self<ReactNativeHost>(reactNativeHost)->OnDebuggerResume();
-                    }
-                  }
-                });
-          } else {
-            ::Microsoft::ReactNative::DebuggerNotifications::OnHideDebuggerPausedOverlay(instanceSettings.Notifications());
-          }*/
+      auto notifications = reactHost->Options().Notifications;
+      if (request.message.has_value()) {
+        ::Microsoft::ReactNative::DebuggerNotifications::OnShowDebuggerPausedOverlay(
+            notifications, request.message.value(), [weakReactHost = m_reactHost]() {
+              if (Mso::CntPtr<ReactHost> strongReactHost = weakReactHost.GetStrongPtr()) {
+                strongReactHost->OnDebuggerResume();
+              }
+            });
+      } else {
+        ::Microsoft::ReactNative::DebuggerNotifications::OnHideDebuggerPausedOverlay(notifications);
+      }
     }
   }
 
@@ -658,16 +657,12 @@ void ReactHost::RemoveInspectorPage() noexcept {
 }
 
 void ReactHost::OnDebuggerResume() noexcept {
-  // TODO: (vmoroz) implement
-  // std::optional<int32_t> &inspectorPageId = m_inspectorPageId.Load();
-  // if (inspectorPageId.has_value()) {
-  //  ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
-  //      [weakInspectorHost = std::weak_ptr(m_inspectorHost)]() {
-  //        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHost = weakInspectorHost.lock()) {
-  //          inspectorHost->sendCommand(jsinspector_modern::HostCommand::DebuggerResume);
-  //        }
-  //      });
-  //}
+  ::Microsoft::ReactNative::ReactInspectorThread::Instance().Post(
+      [weakInspectorHostTarget = std::weak_ptr(m_inspectorHostTarget)]() {
+        if (std::shared_ptr<jsinspector_modern::HostTarget> inspectorHostTarget = weakInspectorHostTarget.lock()) {
+          inspectorHostTarget->sendCommand(jsinspector_modern::HostCommand::DebuggerResume);
+        }
+      });
 }
 
 //=============================================================================================
