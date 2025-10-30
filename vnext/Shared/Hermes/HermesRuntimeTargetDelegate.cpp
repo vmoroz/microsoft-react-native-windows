@@ -45,7 +45,7 @@ class HermesStackTraceWrapper : public StackTrace {
 
 } // namespace
 
-HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder>&& hermesRuntimeHolder)
+HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder> &&hermesRuntimeHolder)
     : hermesRuntimeHolder_(std::move(hermesRuntimeHolder)),
       hermesCdpDebugger_(HermesDebuggerApi::createCdpDebugger(hermesRuntimeHolder_->getHermesRuntime())) {}
 
@@ -71,7 +71,8 @@ std::unique_ptr<RuntimeAgentDelegate> HermesRuntimeTargetDelegate::createAgentDe
       std::move(runtimeExecutor)));
 }
 
-void HermesRuntimeTargetDelegate::addConsoleMessage(facebook::jsi::Runtime & /*runtime*/, ConsoleMessage message) {
+void HermesRuntimeTargetDelegate::addConsoleMessage(facebook::jsi::Runtime &runtime, ConsoleMessage message) {
+  // Convert ConsoleAPIType to hermes_console_api_type
   hermes_console_api_type type{};
   switch (message.type) {
     case ConsoleAPIType::kLog:
@@ -126,18 +127,27 @@ void HermesRuntimeTargetDelegate::addConsoleMessage(facebook::jsi::Runtime & /*r
       throw std::logic_error{"Unknown console message type"};
   }
 
+  // Create a jsi::Array from the vector of jsi::Values
+  facebook::jsi::Array argsArray(runtime, message.args.size());
+  for (size_t i = 0; i < message.args.size(); ++i) {
+    argsArray.setValueAtIndex(runtime, i, std::move(message.args[i]));
+  }
+
+  // Store array as a temporary global property
+  // Using a property name that's unlikely to collide with user code
+  const char *propName = "__rnw_cdp_console_args";
+  runtime.global().setProperty(runtime, propName, argsArray);
+
+  // Convert stack trace to HermesUniqueStackTrace if available
   HermesUniqueStackTrace hermesStackTrace{};
   if (auto hermesStackTraceWrapper = dynamic_cast<HermesStackTraceWrapper *>(message.stackTrace.get())) {
     hermesStackTrace = std::move(**hermesStackTraceWrapper);
   }
 
-  // TODO: (vmoroz) Implement
-  // HermesApi2().addConsoleMessage(
-  //     hermesCdpDebugger_.get(),
-  //     message.timestamp,
-  //     type,
-  //     std::move(message.args),
-  //     hermesStackTrace.release());
+  // Call C API with property name instead of serialized args
+  // The property will be cleaned up by the Hermes side
+  HermesDebuggerApi::addConsoleMessage(
+      hermesCdpDebugger_.get(), message.timestamp, type, propName, hermesStackTrace.get());
 }
 
 bool HermesRuntimeTargetDelegate::supportsConsole() const {

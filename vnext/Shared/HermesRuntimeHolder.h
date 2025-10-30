@@ -148,6 +148,15 @@ class HermesDebuggerApi {
     checkStatus(vtable->cdp_agent_enable_debugger_domain(cdpAgent));
   }
 
+  static void addConsoleMessage(
+      hermes_cdp_debugger cdpDebugger,
+      double timestamp,
+      hermes_console_api_type type,
+      const char *argsPropertyName,
+      hermes_stack_trace stackTrace) {
+    checkStatus(vtable->cdp_agent_add_console_message(cdpDebugger, timestamp, type, argsPropertyName, stackTrace));
+  }
+
  private:
   friend HermesCdpDebuggerDeleter;
   friend HermesCdpAgentDeleter;
@@ -189,8 +198,7 @@ class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
       std::shared_ptr<facebook::jsi::PreparedScriptStore> preparedScriptStore) noexcept;
   ~HermesRuntimeHolder();
 
-  std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> createRuntimeTargetDelegate()
-      override;
+  std::shared_ptr<facebook::react::jsinspector_modern::RuntimeTargetDelegate> createRuntimeTargetDelegate() override;
 
   static std::shared_ptr<HermesRuntimeHolder> loadFrom(
       winrt::Microsoft::ReactNative::ReactPropertyBag const &propertyBag) noexcept;
