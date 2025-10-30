@@ -35,7 +35,7 @@ class HermesRuntimeTargetDelegate : public facebook::react::jsinspector_modern::
   ~HermesRuntimeTargetDelegate() override;
 
   // Our C-API specific helper method to be used internally instead of RN getCDPDebugAPI() private function.
-  hermes_cdp_debugger getCdpDebugger();
+  hermes_cdp_debug_api getCdpDebugApi();
 
  public: // RuntimeTargetDelegate implementation
   std::unique_ptr<facebook::react::jsinspector_modern::RuntimeAgentDelegate> createAgentDelegate(
@@ -71,7 +71,7 @@ class HermesRuntimeTargetDelegate : public facebook::react::jsinspector_modern::
 
  private:
   std::shared_ptr<HermesRuntimeHolder> hermesRuntimeHolder_;
-  const HermesUniqueCdpDebugger hermesCdpDebugger_;
+  const HermesUniqueCdpDebugApi hermesCdpDebugApi_;
 };
 
 } // namespace Microsoft::ReactNative

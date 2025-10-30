@@ -47,12 +47,12 @@ class HermesStackTraceWrapper : public StackTrace {
 
 HermesRuntimeTargetDelegate::HermesRuntimeTargetDelegate(std::shared_ptr<HermesRuntimeHolder> &&hermesRuntimeHolder)
     : hermesRuntimeHolder_(std::move(hermesRuntimeHolder)),
-      hermesCdpDebugger_(HermesDebuggerApi::createCdpDebugger(hermesRuntimeHolder_->getHermesRuntime())) {}
+      hermesCdpDebugApi_(HermesInspectorApi::createCdpDebugApi(hermesRuntimeHolder_->getHermesRuntime())) {}
 
 HermesRuntimeTargetDelegate::~HermesRuntimeTargetDelegate() = default;
 
-hermes_cdp_debugger HermesRuntimeTargetDelegate::getCdpDebugger() {
-  return hermesCdpDebugger_.get();
+hermes_cdp_debug_api HermesRuntimeTargetDelegate::getCdpDebugApi() {
+  return hermesCdpDebugApi_.get();
 }
 
 std::unique_ptr<RuntimeAgentDelegate> HermesRuntimeTargetDelegate::createAgentDelegate(
@@ -146,8 +146,8 @@ void HermesRuntimeTargetDelegate::addConsoleMessage(facebook::jsi::Runtime &runt
 
   // Call C API with property name instead of serialized args
   // The property will be cleaned up by the Hermes side
-  HermesDebuggerApi::addConsoleMessage(
-      hermesCdpDebugger_.get(), message.timestamp, type, propName, hermesStackTrace.get());
+  HermesInspectorApi::addConsoleMessage(
+      hermesCdpDebugApi_.get(), message.timestamp, type, propName, hermesStackTrace.get());
 }
 
 bool HermesRuntimeTargetDelegate::supportsConsole() const {
@@ -158,24 +158,117 @@ std::unique_ptr<StackTrace> HermesRuntimeTargetDelegate::captureStackTrace(
     facebook::jsi::Runtime & /*runtime*/,
     size_t /*framesToSkip*/) {
   return std::make_unique<HermesStackTraceWrapper>(
-      HermesDebuggerApi::captureStackTrace(hermesRuntimeHolder_->getHermesRuntime()));
+      HermesInspectorApi::captureStackTrace(hermesRuntimeHolder_->getHermesRuntime()));
 }
 
 void HermesRuntimeTargetDelegate::enableSamplingProfiler() {
-  // TODO: (vmoroz) implement
-  // HermesApi2().enableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime(), HERMES_SAMPLING_FREQUENCY_HZ);
+  HermesInspectorApi::enableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime());
 }
 
 void HermesRuntimeTargetDelegate::disableSamplingProfiler() {
-  // TODO: (vmoroz) implement
-  // HermesApi2().disableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime());
+  HermesInspectorApi::disableSamplingProfiler(hermesRuntimeHolder_->getHermesRuntime());
 }
 
-facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile
-HermesRuntimeTargetDelegate::collectSamplingProfile() {
-  // TODO: (vmoroz) implement
-  return facebook::react::jsinspector_modern::tracing::RuntimeSamplingProfile(
-      "stubbed_impl", {}, {}); // [Windows TODO: stubbed implementation #14700]
+namespace {
+
+// Helper class to hold state while reading the sampling profile
+struct SamplingProfileReaderState {
+  std::vector<tracing::RuntimeSamplingProfile::Sample> samples;
+  std::vector<tracing::RuntimeSamplingProfile::SampleCallStackFrame> frames;
+  uint64_t timestamp;
+  uint64_t threadId;
+  bool hasCurrentSample;
+};
+
+static void NAPI_CDECL onInfo(void *cb_data, size_t sample_count) {
+  SamplingProfileReaderState *readerState = reinterpret_cast<SamplingProfileReaderState *>(cb_data);
+  readerState->samples.reserve(sample_count);
+}
+
+// Callback invoked for each sample
+static void NAPI_CDECL onSample(void *cb_data, uint64_t timestamp, uint64_t threadId, size_t frame_count) {
+  SamplingProfileReaderState *readerState = reinterpret_cast<SamplingProfileReaderState *>(cb_data);
+  if (readerState->hasCurrentSample) {
+    // Save the previous sample
+    readerState->samples.emplace_back(readerState->timestamp, readerState->threadId, std::move(readerState->frames));
+  }
+  std::vector<tracing::RuntimeSamplingProfile::SampleCallStackFrame> frames;
+  frames.reserve(frame_count);
+  readerState->frames = std::move(frames);
+  readerState->timestamp = timestamp;
+  readerState->threadId = threadId;
+  readerState->hasCurrentSample = true;
+}
+
+// Callback invoked for each frame within a sample
+static void NAPI_CDECL onFrame(
+    void *cb_data,
+    hermes_call_stack_frame_kind kind,
+    uint32_t scriptId,
+    const char *functionName,
+    size_t functionNameSize,
+    const char *scriptUrl,
+    size_t scriptUrlSize,
+    uint32_t lineNumber,
+    uint32_t columnNumber) {
+  SamplingProfileReaderState *readerState = reinterpret_cast<SamplingProfileReaderState *>(cb_data);
+
+  using Kind = tracing::RuntimeSamplingProfile::SampleCallStackFrame::Kind;
+
+  Kind frameKind;
+  switch (kind) {
+    case hermes_call_stack_frame_kind_js_function:
+      frameKind = Kind::JSFunction;
+      break;
+    case hermes_call_stack_frame_kind_native_function:
+      frameKind = Kind::NativeFunction;
+      break;
+    case hermes_call_stack_frame_kind_host_function:
+      frameKind = Kind::HostFunction;
+      break;
+    case hermes_call_stack_frame_kind_gc:
+      frameKind = Kind::GarbageCollector;
+      break;
+    default:
+      return; // Unknown frame kind, skip
+  }
+
+  std::string_view funcName(functionName, functionNameSize);
+  std::optional<std::string_view> url =
+      scriptUrl ? std::optional{std::string_view(scriptUrl, scriptUrlSize)} : std::nullopt;
+  std::optional<uint32_t> line = lineNumber > 0 ? std::optional{lineNumber} : std::nullopt;
+  std::optional<uint32_t> column = columnNumber > 0 ? std::optional{columnNumber} : std::nullopt;
+
+  readerState->frames.emplace_back(frameKind, scriptId, funcName, url, line, column);
+}
+
+class HermesRawRuntimeProfile : public tracing::RawRuntimeProfile {
+ public:
+  explicit HermesRawRuntimeProfile(HermesUniqueSamplingProfile hermesProfile)
+      : hermesProfile_{std::move(hermesProfile)} {}
+
+ private:
+  HermesUniqueSamplingProfile hermesProfile_;
+};
+
+} // namespace
+
+tracing::RuntimeSamplingProfile HermesRuntimeTargetDelegate::collectSamplingProfile() {
+  // Create a readerState state to gather samples and frames
+  SamplingProfileReaderState readerState{};
+
+  // Collect the profile from Hermes
+  HermesUniqueSamplingProfile profile = HermesInspectorApi::collectSamplingProfile(
+      hermesRuntimeHolder_->getHermesRuntime(), &readerState, onInfo, onSample, onFrame);
+
+  if (readerState.hasCurrentSample) {
+    // Save the last sample
+    readerState.samples.emplace_back(readerState.timestamp, readerState.threadId, std::move(readerState.frames));
+  }
+
+  // Return the complete profile with samples. Wrap the raw profile since it owns the strings.
+  return tracing::RuntimeSamplingProfile(
+      "Hermes", std::move(readerState.samples), std::make_unique<HermesRawRuntimeProfile>(std::move(profile)));
 }
 
 } // namespace Microsoft::ReactNative

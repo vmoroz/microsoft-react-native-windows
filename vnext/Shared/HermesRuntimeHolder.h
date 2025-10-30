@@ -66,9 +66,9 @@ class FunctorWrapper : public FunctorWrapperBase<TFunctor, decltype(std::declval
   using FunctorWrapperBase<TFunctor, decltype(std::declval<TFunctor>().invoke)>::FunctorWrapperBase;
 };
 
-class HermesCdpDebuggerDeleter {
+class HermesCdpDebugApiDeleter {
  public:
-  void operator()(hermes_cdp_debugger cdp_debugger);
+  void operator()(hermes_cdp_debug_api cdp_debug_api);
 };
 
 class HermesCdpAgentDeleter {
@@ -86,14 +86,20 @@ class HermesStackTraceDeleter {
   void operator()(hermes_stack_trace stack_trace);
 };
 
-using HermesUniqueCdpDebugger = std::unique_ptr<hermes_cdp_debugger_s, HermesCdpDebuggerDeleter>;
+class HermesSamplingProfileDeleter {
+ public:
+  void operator()(hermes_sampling_profile sampling_profile);
+};
+
+using HermesUniqueCdpDebugApi = std::unique_ptr<hermes_cdp_debug_api_s, HermesCdpDebugApiDeleter>;
 using HermesUniqueCdpAgent = std::unique_ptr<hermes_cdp_agent_s, HermesCdpAgentDeleter>;
 using HermesUniqueCdpState = std::unique_ptr<hermes_cdp_state_s, HermesCdpStateDeleter>;
 using HermesUniqueStackTrace = std::unique_ptr<hermes_stack_trace_s, HermesStackTraceDeleter>;
+using HermesUniqueSamplingProfile = std::unique_ptr<hermes_sampling_profile_s, HermesSamplingProfileDeleter>;
 
-class HermesDebuggerApi {
+class HermesInspectorApi {
  public:
-  HermesDebuggerApi() = delete;
+  HermesInspectorApi() = delete;
 
   static void checkStatus(hermes_status status) {
     if (status != hermes_status_ok) {
@@ -101,21 +107,30 @@ class HermesDebuggerApi {
     }
   }
 
-  static HermesUniqueCdpDebugger createCdpDebugger(hermes_runtime runtime) {
-    hermes_cdp_debugger cdp_debugger{};
-    checkStatus(vtable->create_cdp_debugger(runtime, &cdp_debugger));
-    return HermesUniqueCdpDebugger{cdp_debugger};
+  static HermesUniqueCdpDebugApi createCdpDebugApi(hermes_runtime runtime) {
+    hermes_cdp_debug_api cdp_debug_api{};
+    checkStatus(vtable->create_cdp_debug_api(runtime, &cdp_debug_api));
+    return HermesUniqueCdpDebugApi{cdp_debug_api};
+  }
+
+  static void addConsoleMessage(
+      hermes_cdp_debug_api cdpDebugApi,
+      double timestamp,
+      hermes_console_api_type type,
+      const char *argsPropertyName,
+      hermes_stack_trace stackTrace) {
+    checkStatus(vtable->add_console_message(cdpDebugApi, timestamp, type, argsPropertyName, stackTrace));
   }
 
   static HermesUniqueCdpAgent createCdpAgent(
-      hermes_cdp_debugger cdpDebugger,
+      hermes_cdp_debug_api cdpDebugApi,
       int32_t execitionContextId,
       hermes_enqueue_runtime_task_functor enqueueRuntimeTaskCallback,
       hermes_enqueue_frontend_message_functor enqueueFrontendMessageCallback,
       hermes_cdp_state cdp_state) {
     hermes_cdp_agent cdp_agent{};
     checkStatus(vtable->create_cdp_agent(
-        cdpDebugger,
+        cdpDebugApi,
         execitionContextId,
         enqueueRuntimeTaskCallback,
         enqueueFrontendMessageCallback,
@@ -126,14 +141,8 @@ class HermesDebuggerApi {
 
   static HermesUniqueCdpState getCdpState(hermes_cdp_agent cdp_agent) {
     hermes_cdp_state cdp_state{};
-    checkStatus(vtable->get_cdp_state(cdp_agent, &cdp_state));
+    checkStatus(vtable->cdp_agent_get_state(cdp_agent, &cdp_state));
     return HermesUniqueCdpState{cdp_state};
-  }
-
-  static HermesUniqueStackTrace captureStackTrace(hermes_runtime runtime) {
-    hermes_stack_trace stack_trace{};
-    checkStatus(vtable->capture_stack_trace(runtime, &stack_trace));
-    return HermesUniqueStackTrace{stack_trace};
   }
 
   static void handleCommand(hermes_cdp_agent cdpAgent, const char *jsonUtf8, size_t jsonSize) {
@@ -148,40 +157,62 @@ class HermesDebuggerApi {
     checkStatus(vtable->cdp_agent_enable_debugger_domain(cdpAgent));
   }
 
-  static void addConsoleMessage(
-      hermes_cdp_debugger cdpDebugger,
-      double timestamp,
-      hermes_console_api_type type,
-      const char *argsPropertyName,
-      hermes_stack_trace stackTrace) {
-    checkStatus(vtable->cdp_agent_add_console_message(cdpDebugger, timestamp, type, argsPropertyName, stackTrace));
+  static HermesUniqueStackTrace captureStackTrace(hermes_runtime runtime) {
+    hermes_stack_trace stack_trace{};
+    checkStatus(vtable->capture_stack_trace(runtime, &stack_trace));
+    return HermesUniqueStackTrace{stack_trace};
+  }
+
+  static void enableSamplingProfiler(hermes_runtime runtime) {
+    checkStatus(vtable->enable_sampling_profiler(runtime));
+  }
+
+  static void disableSamplingProfiler(hermes_runtime runtime) {
+    checkStatus(vtable->disable_sampling_profiler(runtime));
+  }
+
+  static HermesUniqueSamplingProfile collectSamplingProfile(
+      hermes_runtime runtime,
+      void *cb_data,
+      hermes_on_sampling_profile_info_callback on_info_callback,
+      hermes_on_sampling_profile_sample_callback on_sample_callback,
+      hermes_on_sampling_profile_frame_callback on_frame_callback) {
+    hermes_sampling_profile profile{};
+    checkStatus(vtable->collect_sampling_profile(
+        runtime, cb_data, on_info_callback, on_sample_callback, on_frame_callback, &profile));
+    return HermesUniqueSamplingProfile{profile};
   }
 
  private:
-  friend HermesCdpDebuggerDeleter;
+  friend HermesCdpDebugApiDeleter;
   friend HermesCdpAgentDeleter;
   friend HermesCdpStateDeleter;
   friend HermesStackTraceDeleter;
+  friend HermesSamplingProfileDeleter;
 
-  friend void setHermesDebuggerVTable(const hermes_debugger_vtable *vtable);
+  friend void setHermesInspectorVTable(const hermes_inspector_vtable *vtable);
 
-  static const hermes_debugger_vtable *vtable;
+  static const hermes_inspector_vtable *vtable;
 };
 
-inline void HermesCdpDebuggerDeleter::operator()(hermes_cdp_debugger cdp_debugger) {
-  HermesDebuggerApi::vtable->release_cdp_debugger(cdp_debugger);
+inline void HermesCdpDebugApiDeleter::operator()(hermes_cdp_debug_api cdp_debug_api) {
+  HermesInspectorApi::vtable->release_cdp_debug_api(cdp_debug_api);
 }
 
 inline void HermesCdpAgentDeleter::operator()(hermes_cdp_agent cdp_agent) {
-  HermesDebuggerApi::vtable->release_cdp_agent(cdp_agent);
+  HermesInspectorApi::vtable->release_cdp_agent(cdp_agent);
 }
 
 inline void HermesCdpStateDeleter::operator()(hermes_cdp_state cdp_state) {
-  HermesDebuggerApi::vtable->release_cdp_state(cdp_state);
+  HermesInspectorApi::vtable->release_cdp_state(cdp_state);
 }
 
 inline void HermesStackTraceDeleter::operator()(hermes_stack_trace stack_trace) {
-  HermesDebuggerApi::vtable->release_stack_trace(stack_trace);
+  HermesInspectorApi::vtable->release_stack_trace(stack_trace);
+}
+
+inline void HermesSamplingProfileDeleter::operator()(hermes_sampling_profile sampling_profile) {
+  HermesInspectorApi::vtable->release_sampling_profile(sampling_profile);
 }
 
 class HermesRuntimeHolder : public Microsoft::JSI::RuntimeHolderLazyInit,
