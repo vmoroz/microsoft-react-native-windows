@@ -98,12 +98,7 @@ TaskDispatchThread::Impl::~Impl() noexcept {
 }
 
 void TaskDispatchThread::Impl::start() noexcept {
-  std::promise<void> promise;
-  thread_ = std::thread([this, &promise]() {
-    promise.set_value();
-    loop();
-  });
-  promise.get_future().wait();
+  thread_ = std::thread([self = shared_from_this()]() { self->loop(); });
 }
 
 bool TaskDispatchThread::Impl::isOnThread() noexcept {
@@ -151,9 +146,6 @@ void TaskDispatchThread::Impl::quit() noexcept {
 }
 
 void TaskDispatchThread::Impl::loop() noexcept {
-  // Keep the Impl instance alive while the loop is running
-  std::shared_ptr<Impl> self{shared_from_this()};
-
   if (!threadName_.empty()) {
     folly::setThreadName(threadName_);
   }
