@@ -61,29 +61,29 @@ export default class IntegrationTestRunner {
         failWithoutContext(`Error from test host: "${res.message}"`);
         break;
 
-      case 'exception':
-        // Jest will special case exceptions named "AssertionError" to be Node
-        // AssertionErrors with extra information on them. Rewrite the name so
-        // that Jest doesn't try to pull extra information from Chai assertions.
-        if (res.name === 'AssertionError') {
-          res.name = 'Error';
-          res.message = res.message.replace('AssertionError', 'Error');
-        }
+      case 'exception': {
+          // Jest will special case exceptions named "AssertionError" to be Node
+          // AssertionErrors with extra information on them. Rewrite the name so
+          // that Jest doesn't try to pull extra information from Chai assertions.
+          if (res.name === 'AssertionError') {
+            res.name = 'Error';
+            res.message = res.message.replace('AssertionError', 'Error');
+          }
 
-        const err = new Error(res.originalMessage);
-        err.name = res.name;
-        err.stack =
-          res.message +
-          res.callstack
-            .map(
-              frame =>
-                `\n    at ${frame.method}(${prettifyFile(frame.file)}:${
-                  frame.line
-                }:${frame.column})`,
-            )
-            .join();
-        throw err;
-        break;
+          const err = new Error(res.originalMessage);
+          err.name = res.name;
+          err.stack =
+            res.message +
+            res.callstack
+              .map(
+                frame =>
+                  `\n    at ${frame.method}(${prettifyFile(frame.file)}:${
+                    frame.line
+                  }:${frame.column})`,
+              )
+              .join();
+          throw err;
+        }
 
       case 'failed':
         failWithoutContext('TestModule.markTestPassed(false) was called');
