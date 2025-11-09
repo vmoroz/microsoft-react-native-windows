@@ -19,7 +19,7 @@
 .PARAMETER NoTest
     Skip running the integration tests (useful for just building and launching the app)
 
-.PARAMETER Verbose
+.PARAMETER VerboseOutput
     Enable verbose MSBuild output for debugging build issues
 
 .EXAMPLE
@@ -31,66 +31,66 @@
     Builds and runs integration tests for X64 Debug without starting the packager
 
 .EXAMPLE
-    .\run-integration-tests-locally.ps1 -Config X64Release -Verbose
+    .\run-integration-tests-locally.ps1 -Config X64Release -VerboseOutput
     Builds with verbose output to help diagnose build failures
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory = $true)]
     [ValidateSet('Arm64Debug', 'X64WebDebug', 'X86WebDebug', 'X64Release', 'X86Release', 'X64ReleaseChakra', 'X86ReleaseChakra')]
     [string]$Config,
     
     [switch]$NoPackager,
     [switch]$NoBuild,
     [switch]$NoTest,
-    [switch]$Verbose
+    [switch]$VerboseOutput
 )
 
 $ErrorActionPreference = 'Stop'
 
 # Define the configuration matrix
 $configurations = @{
-    'Arm64Debug' = @{
-        BuildPlatform = 'ARM64'
+    'Arm64Debug'       = @{
+        BuildPlatform      = 'ARM64'
         BuildConfiguration = 'Debug'
-        DeployOptions = '--no-deploy'
-        UseChakra = $false
+        DeployOptions      = '--no-deploy'
+        UseChakra          = $false
     }
-    'X64WebDebug' = @{
-        BuildPlatform = 'x64'
+    'X64WebDebug'      = @{
+        BuildPlatform      = 'x64'
         BuildConfiguration = 'Debug'
-        DeployOptions = ''
-        UseChakra = $false
+        DeployOptions      = ''
+        UseChakra          = $false
     }
-    'X86WebDebug' = @{
-        BuildPlatform = 'x86'
+    'X86WebDebug'      = @{
+        BuildPlatform      = 'x86'
         BuildConfiguration = 'Debug'
-        DeployOptions = ''
-        UseChakra = $false
+        DeployOptions      = ''
+        UseChakra          = $false
     }
-    'X64Release' = @{
-        BuildPlatform = 'x64'
+    'X64Release'       = @{
+        BuildPlatform      = 'x64'
         BuildConfiguration = 'Release'
-        DeployOptions = ''
-        UseChakra = $false
+        DeployOptions      = ''
+        UseChakra          = $false
     }
-    'X86Release' = @{
-        BuildPlatform = 'x86'
+    'X86Release'       = @{
+        BuildPlatform      = 'x86'
         BuildConfiguration = 'Release'
-        DeployOptions = ''
-        UseChakra = $false
+        DeployOptions      = ''
+        UseChakra          = $false
     }
     'X64ReleaseChakra' = @{
-        BuildPlatform = 'x64'
+        BuildPlatform      = 'x64'
         BuildConfiguration = 'Release'
-        DeployOptions = ''
-        UseChakra = $true
+        DeployOptions      = ''
+        UseChakra          = $true
     }
     'X86ReleaseChakra' = @{
-        BuildPlatform = 'x86'
+        BuildPlatform      = 'x86'
         BuildConfiguration = 'Release'
-        DeployOptions = ''
-        UseChakra = $true
+        DeployOptions      = ''
+        UseChakra          = $true
     }
 }
 
@@ -124,14 +124,16 @@ try {
         if ($matrix.UseChakra) {
             $newProp.AppendChild($xmlDoc.CreateTextNode("false"))
             Write-Host "  Set UseHermes=false (using Chakra)" -ForegroundColor Green
-        } else {
+        }
+        else {
             $newProp.AppendChild($xmlDoc.CreateTextNode("true"))
             Write-Host "  Set UseHermes=true" -ForegroundColor Green
         }
         
         $xmlDoc.DocumentElement.AppendChild($propertyGroup)
         $xmlDoc.Save($experimentalFeaturesPath)
-    } else {
+    }
+    else {
         Write-Warning "ExperimentalFeatures.props not found at $experimentalFeaturesPath"
     }
 
@@ -153,12 +155,13 @@ try {
                 New-Item -ItemType Directory -Path $buildLogDir -Force | Out-Null
             }
             
-            $verboseArg = if ($Verbose) { " --logging --verbose" } else { " --logging" }
-            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`""
+            $verboseArg = if ($VerboseOutput) { " --logging --verbose" } else { " --logging" }
+            # Use RestoreLockedMode=false for local builds to avoid NuGet lock file issues
+            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
             Write-Host "  Running: npx @react-native-community/cli $buildArgs" -ForegroundColor Gray
             Write-Host "  Build logs will be in: $buildLogDir" -ForegroundColor Gray
             
-            npx @react-native-community/cli run-windows --arch $matrix.BuildPlatform --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory "$buildLogDir"
+            npx @react-native-community/cli run-windows --arch $matrix.BuildPlatform --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory "$buildLogDir" --msbuildprops RestoreLockedMode=false
             if ($LASTEXITCODE -ne 0) {
                 Write-Host ""
                 Write-Host "========================================" -ForegroundColor Red
@@ -176,7 +179,8 @@ try {
                 throw "Build failed with exit code $LASTEXITCODE"
             }
             Write-Host "  Build completed successfully" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
         }
 
@@ -184,7 +188,7 @@ try {
             # Step 3: Start packager
             Write-Host ""
             Write-Host "Step 3: Starting packager..." -ForegroundColor Yellow
-            Start-Process npm.cmd -ArgumentList "run","start" -WorkingDirectory $integrationTestAppPath
+            Start-Process npm.cmd -ArgumentList "run", "start" -WorkingDirectory $integrationTestAppPath
             Write-Host "  Packager started in background" -ForegroundColor Green
 
             # Step 4: Warm up the packager
@@ -197,7 +201,8 @@ try {
                     Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8081/index.bundle?platform=windows&dev=true" -TimeoutSec 5 | Out-Null
                     Write-Host "  Packager is ready" -ForegroundColor Green
                     break
-                } catch {
+                }
+                catch {
                     $retryCount++
                     if ($retryCount -ge $maxRetries) {
                         Write-Warning "Packager did not respond after $maxRetries attempts"
@@ -214,7 +219,8 @@ try {
             Start-Process chrome "http://localhost:8081/debugger-ui/"
             Write-Host "  Debugger UI launched in Chrome" -ForegroundColor Green
             Start-Sleep -Seconds 2
-        } else {
+        }
+        else {
             Write-Host ""
             Write-Host "Step 3-5: Skipping packager steps (NoPackager flag set)" -ForegroundColor Gray
         }
@@ -227,7 +233,8 @@ try {
         $launchCmd = "yarn $launchArgs"
         Invoke-Expression $launchCmd
 
-    } else {
+    }
+    else {
         # Release configuration steps
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Cyan
@@ -245,12 +252,13 @@ try {
                 New-Item -ItemType Directory -Path $buildLogDir -Force | Out-Null
             }
             
-            $verboseArg = if ($Verbose) { " --logging --verbose" } else { " --logging" }
-            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`""
+            $verboseArg = if ($VerboseOutput) { " --logging --verbose" } else { " --logging" }
+            # Use RestoreLockedMode=false for local builds to avoid NuGet lock file issues
+            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
             Write-Host "  Running: npx @react-native-community/cli $buildArgs" -ForegroundColor Gray
             Write-Host "  Build logs will be in: $buildLogDir" -ForegroundColor Gray
             
-            $buildCmd = "npx @react-native-community/cli run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`""
+            $buildCmd = "npx @react-native-community/cli run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
             Invoke-Expression $buildCmd
             if ($LASTEXITCODE -ne 0) {
                 Write-Host ""
@@ -269,7 +277,8 @@ try {
                 throw "Build failed with exit code $LASTEXITCODE"
             }
             Write-Host "  Build completed successfully" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
         }
 
@@ -312,24 +321,28 @@ try {
             Write-Host "========================================" -ForegroundColor Green
             Write-Host "Integration Tests PASSED" -ForegroundColor Green
             Write-Host "========================================" -ForegroundColor Green
-        } else {
+        }
+        else {
             Write-Host ""
             Write-Host "========================================" -ForegroundColor Red
             Write-Host "Integration Tests FAILED" -ForegroundColor Red
             Write-Host "========================================" -ForegroundColor Red
             exit $LASTEXITCODE
         }
-    } else {
+    }
+    else {
         if ($matrix.DeployOptions -eq '--no-deploy') {
             Write-Host ""
             Write-Host "Note: This configuration uses --no-deploy (likely ARM64), so tests are not run" -ForegroundColor Yellow
-        } elseif ($NoTest) {
+        }
+        elseif ($NoTest) {
             Write-Host ""
             Write-Host "Note: Skipping tests (NoTest flag set)" -ForegroundColor Yellow
         }
     }
 
-} finally {
+}
+finally {
     Pop-Location
     
     Write-Host ""
