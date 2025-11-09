@@ -39,7 +39,7 @@ const TESTS = [
 ];
 
 TESTS.forEach(test => {
-  alert(`TEST.registerComponent "${test.displayName}" "${test.name}"`);
+  //alert(`TEST.registerComponent "${test.displayName}" "${test.name}"`);
   AppRegistry.registerComponent(
     test.displayName || test.name || '',
     /* $FlowFixMe[incompatible-call] (>=0.54.0 site=react_native_fb,react_native_
