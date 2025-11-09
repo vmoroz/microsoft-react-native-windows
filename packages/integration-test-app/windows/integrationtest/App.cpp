@@ -7,6 +7,8 @@
 
 #include <winrt/InteropTestModuleCS.h>
 
+#include <debugapi.h>
+
 using namespace winrt::integrationtest;
 using namespace winrt::integrationtest::implementation;
 using namespace winrt;
@@ -21,6 +23,17 @@ using namespace Windows::ApplicationModel;
 /// WinMain().
 /// </summary>
 App::App() noexcept {
+#if defined(_DEBUG)
+  if (!::IsDebuggerPresent()) {
+    for (int countdown = 300; countdown > 0 && !::IsDebuggerPresent(); --countdown) {
+      ::Sleep(100); // wait up to ~30s for Attach to Process
+    }
+  }
+  if (::IsDebuggerPresent()) {
+    ::DebugBreak(); // break here as soon as a debugger is attached
+  }
+#endif
+
 #if BUNDLE
   JavaScriptBundleFile(L"index.windows");
   InstanceSettings().UseWebDebugger(false);

@@ -19,6 +19,9 @@
 .PARAMETER NoTest
     Skip running the integration tests (useful for just building and launching the app)
 
+.PARAMETER LaunchOnly
+    Skip feature toggles, build, packager, and tests; only launches the app
+
 .PARAMETER VerboseOutput
     Enable verbose MSBuild output for debugging build issues
 
@@ -33,20 +36,30 @@
 .EXAMPLE
     .\run-integration-tests-locally.ps1 -Config X64Release -VerboseOutput
     Builds with verbose output to help diagnose build failures
+
+.EXAMPLE
+    .\run-integration-tests-locally.ps1 -Config X64DebugChakra -LaunchOnly
+    Launches a previously built X64 debug Chakra app without rebuilding or running tests
 #>
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Arm64Debug', 'X64WebDebug', 'X86WebDebug', 'X64Release', 'X86Release', 'X64ReleaseChakra', 'X86ReleaseChakra')]
+    [ValidateSet('Arm64Debug', 'X64WebDebug', 'X64DebugChakra', 'X86WebDebug', 'X64Release', 'X86Release', 'X64ReleaseChakra', 'X86ReleaseChakra')]
     [string]$Config,
     
     [switch]$NoPackager,
     [switch]$NoBuild,
     [switch]$NoTest,
-    [switch]$VerboseOutput
+    [switch]$VerboseOutput,
+    [switch]$LaunchOnly
 )
 
 $ErrorActionPreference = 'Stop'
+
+$launchOnlyMode = $LaunchOnly.IsPresent
+$skipBuild = $NoBuild.IsPresent -or $launchOnlyMode
+$skipPackager = $NoPackager.IsPresent -or $launchOnlyMode
+$skipTest = $NoTest.IsPresent -or $launchOnlyMode
 
 # Define the configuration matrix
 # Note: Chakra uses the Windows in-box Chakra engine (EdgeMode JSRT). 
@@ -64,6 +77,12 @@ $configurations = @{
         BuildConfiguration = 'Debug'
         DeployOptions      = ''
         UseChakra          = $false
+    }
+    'X64DebugChakra'   = @{
+        BuildPlatform      = 'x64'
+        BuildConfiguration = 'Debug'
+        DeployOptions      = ''
+        UseChakra          = $true
     }
     'X86WebDebug'      = @{
         BuildPlatform      = 'x86'
@@ -117,27 +136,32 @@ Push-Location $integrationTestAppPath
 
 try {
     # Step 1: Set experimental feature (UseHermes)
-    Write-Host "Step 1: Setting UseHermes experimental feature..." -ForegroundColor Yellow
-    if (Test-Path $experimentalFeaturesPath) {
-        [xml]$xmlDoc = Get-Content $experimentalFeaturesPath
-        # Add to new property group at the end of the file to ensure it overrides any other setting
-        $propertyGroup = $xmlDoc.CreateElement("PropertyGroup", $xmlDoc.DocumentElement.NamespaceURI)
-        $newProp = $propertyGroup.AppendChild($xmlDoc.CreateElement("UseHermes", $xmlDoc.DocumentElement.NamespaceURI))
-        
-        if ($matrix.UseChakra) {
-            $newProp.AppendChild($xmlDoc.CreateTextNode("false"))
-            Write-Host "  Set UseHermes=false (using Chakra)" -ForegroundColor Green
+    if (-not $launchOnlyMode) {
+        Write-Host "Step 1: Setting UseHermes experimental feature..." -ForegroundColor Yellow
+        if (Test-Path $experimentalFeaturesPath) {
+            [xml]$xmlDoc = Get-Content $experimentalFeaturesPath
+            # Add to new property group at the end of the file to ensure it overrides any other setting
+            $propertyGroup = $xmlDoc.CreateElement("PropertyGroup", $xmlDoc.DocumentElement.NamespaceURI)
+            $newProp = $propertyGroup.AppendChild($xmlDoc.CreateElement("UseHermes", $xmlDoc.DocumentElement.NamespaceURI))
+
+            if ($matrix.UseChakra) {
+                $newProp.AppendChild($xmlDoc.CreateTextNode("false"))
+                Write-Host "  Set UseHermes=false (using Chakra)" -ForegroundColor Green
+            }
+            else {
+                $newProp.AppendChild($xmlDoc.CreateTextNode("true"))
+                Write-Host "  Set UseHermes=true" -ForegroundColor Green
+            }
+
+            $xmlDoc.DocumentElement.AppendChild($propertyGroup)
+            $xmlDoc.Save($experimentalFeaturesPath)
         }
         else {
-            $newProp.AppendChild($xmlDoc.CreateTextNode("true"))
-            Write-Host "  Set UseHermes=true" -ForegroundColor Green
+            Write-Warning "ExperimentalFeatures.props not found at $experimentalFeaturesPath"
         }
-        
-        $xmlDoc.DocumentElement.AppendChild($propertyGroup)
-        $xmlDoc.Save($experimentalFeaturesPath)
     }
     else {
-        Write-Warning "ExperimentalFeatures.props not found at $experimentalFeaturesPath"
+        Write-Host "Step 1: LaunchOnly enabled, skipping UseHermes updates" -ForegroundColor Gray
     }
 
     if ($matrix.BuildConfiguration -eq 'Debug') {
@@ -147,7 +171,7 @@ try {
         Write-Host "DEBUG Configuration Build & Run" -ForegroundColor Cyan
         Write-Host "========================================" -ForegroundColor Cyan
 
-        if (-not $NoBuild) {
+        if (-not $skipBuild) {
             # Step 2a: Build the app (no deploy, no packager, no autolink)
             Write-Host ""
             Write-Host "Step 2: Building the app..." -ForegroundColor Yellow
@@ -158,13 +182,27 @@ try {
                 New-Item -ItemType Directory -Path $buildLogDir -Force | Out-Null
             }
             
-            $verboseArg = if ($VerboseOutput) { " --logging --verbose" } else { " --logging" }
             # Use RestoreLockedMode=false for local builds to avoid NuGet lock file issues
-            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
-            Write-Host "  Running: npx @react-native-community/cli $buildArgs" -ForegroundColor Gray
+            $buildArgs = @(
+                'run-windows',
+                '--arch', $matrix.BuildPlatform,
+                '--no-launch',
+                '--no-packager',
+                '--no-deploy',
+                '--no-autolink',
+                '--buildLogDirectory', $buildLogDir,
+                '--msbuildprops', 'RestoreLockedMode=false'
+            )
+            if ($VerboseOutput) {
+                $buildArgs += @('--logging', '--verbose')
+            }
+            else {
+                $buildArgs += '--logging'
+            }
+            Write-Host "  Running: npx @react-native-community/cli $($buildArgs -join ' ')" -ForegroundColor Gray
             Write-Host "  Build logs will be in: $buildLogDir" -ForegroundColor Gray
             
-            npx @react-native-community/cli run-windows --arch $matrix.BuildPlatform --no-launch --no-packager --no-deploy --no-autolink$verboseArg --buildLogDirectory "$buildLogDir" --msbuildprops RestoreLockedMode=false
+            npx @react-native-community/cli @buildArgs
             if ($LASTEXITCODE -ne 0) {
                 Write-Host ""
                 Write-Host "========================================" -ForegroundColor Red
@@ -184,10 +222,15 @@ try {
             Write-Host "  Build completed successfully" -ForegroundColor Green
         }
         else {
-            Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
+            if ($launchOnlyMode) {
+                Write-Host "Step 2: LaunchOnly enabled, skipping build" -ForegroundColor Gray
+            }
+            else {
+                Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
+            }
         }
 
-        if (-not $NoPackager) {
+        if (-not $skipPackager) {
             # Step 3: Start packager
             Write-Host ""
             Write-Host "Step 3: Starting packager..." -ForegroundColor Yellow
@@ -223,9 +266,13 @@ try {
             Write-Host "  Debugger UI launched in Chrome" -ForegroundColor Green
             Start-Sleep -Seconds 2
         }
-        else {
+        elseif (-not $launchOnlyMode) {
             Write-Host ""
             Write-Host "Step 3-5: Skipping packager steps (NoPackager flag set)" -ForegroundColor Gray
+        }
+        else {
+            Write-Host ""
+            Write-Host "Step 3-5: LaunchOnly enabled, skipping packager steps" -ForegroundColor Gray
         }
 
         # Step 6: Launch the app
@@ -244,7 +291,7 @@ try {
         Write-Host "RELEASE Configuration Build & Run" -ForegroundColor Cyan
         Write-Host "========================================" -ForegroundColor Cyan
 
-        if (-not $NoBuild) {
+        if (-not $skipBuild) {
             # Step 2b: Build the app (release mode)
             Write-Host ""
             Write-Host "Step 2: Building the app (Release)..." -ForegroundColor Yellow
@@ -255,14 +302,30 @@ try {
                 New-Item -ItemType Directory -Path $buildLogDir -Force | Out-Null
             }
             
-            $verboseArg = if ($VerboseOutput) { " --logging --verbose" } else { " --logging" }
             # Use RestoreLockedMode=false for local builds to avoid NuGet lock file issues
-            $buildArgs = "run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
-            Write-Host "  Running: npx @react-native-community/cli $buildArgs" -ForegroundColor Gray
+            $buildArgs = @(
+                'run-windows',
+                '--arch', $matrix.BuildPlatform,
+                '--release',
+                '--no-launch',
+                '--no-packager',
+                '--no-autolink',
+                '--buildLogDirectory', $buildLogDir,
+                '--msbuildprops', 'RestoreLockedMode=false'
+            )
+            if (-not [string]::IsNullOrWhiteSpace($matrix.DeployOptions)) {
+                $buildArgs += $matrix.DeployOptions
+            }
+            if ($VerboseOutput) {
+                $buildArgs += @('--logging', '--verbose')
+            }
+            else {
+                $buildArgs += '--logging'
+            }
+            Write-Host "  Running: npx @react-native-community/cli $($buildArgs -join ' ')" -ForegroundColor Gray
             Write-Host "  Build logs will be in: $buildLogDir" -ForegroundColor Gray
             
-            $buildCmd = "npx @react-native-community/cli run-windows --arch $($matrix.BuildPlatform) --release --no-launch --no-packager $($matrix.DeployOptions) --no-autolink$verboseArg --buildLogDirectory `"$buildLogDir`" --msbuildprops RestoreLockedMode=false"
-            Invoke-Expression $buildCmd
+            npx @react-native-community/cli @buildArgs
             if ($LASTEXITCODE -ne 0) {
                 Write-Host ""
                 Write-Host "========================================" -ForegroundColor Red
@@ -282,7 +345,12 @@ try {
             Write-Host "  Build completed successfully" -ForegroundColor Green
         }
         else {
-            Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
+            if ($launchOnlyMode) {
+                Write-Host "Step 2: LaunchOnly enabled, skipping build" -ForegroundColor Gray
+            }
+            else {
+                Write-Host "Step 2: Skipping build (NoBuild flag set)" -ForegroundColor Gray
+            }
         }
 
         # Step 3: Launch the app (release mode)
@@ -294,7 +362,7 @@ try {
         Invoke-Expression $launchCmd
     }
 
-    if ($matrix.DeployOptions -ne '--no-deploy' -and -not $NoTest) {
+    if ($matrix.DeployOptions -ne '--no-deploy' -and -not $skipTest) {
         # Run integration tests
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Cyan
@@ -338,9 +406,14 @@ try {
             Write-Host ""
             Write-Host "Note: This configuration uses --no-deploy (likely ARM64), so tests are not run" -ForegroundColor Yellow
         }
-        elseif ($NoTest) {
+        elseif ($skipTest) {
             Write-Host ""
-            Write-Host "Note: Skipping tests (NoTest flag set)" -ForegroundColor Yellow
+            if ($launchOnlyMode) {
+                Write-Host "Note: Skipping tests (LaunchOnly mode)" -ForegroundColor Yellow
+            }
+            else {
+                Write-Host "Note: Skipping tests (NoTest flag set)" -ForegroundColor Yellow
+            }
         }
     }
 
