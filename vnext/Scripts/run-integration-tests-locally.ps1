@@ -49,6 +49,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Define the configuration matrix
+# Note: Chakra uses the Windows in-box Chakra engine (EdgeMode JSRT). 
+# Hermes became the default JS engine in November 2023, but Chakra is still supported.
+# Some tests may fail with Chakra due to API differences or newer React Native features.
 $configurations = @{
     'Arm64Debug'       = @{
         BuildPlatform      = 'ARM64'

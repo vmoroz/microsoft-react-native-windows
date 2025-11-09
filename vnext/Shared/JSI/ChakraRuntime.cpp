@@ -278,8 +278,11 @@ bool ChakraRuntime::drainMicrotasks(int /*maxMicrotasksHint*/) {
   return true;
 }
 
-void ChakraRuntime::queueMicrotask(const facebook::jsi::Function &) {
-  throw facebook::jsi::JSINativeException("Not implemented");
+void ChakraRuntime::queueMicrotask(const facebook::jsi::Function &callback) {
+  // Queue the callback using Chakra's promise continuation mechanism
+  // This allows queueMicrotask to work with Chakra's existing microtask queue
+  JsValueRef funcRef = GetJsRef(callback);
+  PromiseContinuation(funcRef);
 }
 
 facebook::jsi::Object ChakraRuntime::global() {
@@ -1110,7 +1113,7 @@ size_t ChakraRuntime::JsiValueViewArgs::Size() const noexcept {
 
 ChakraRuntime::PropNameIDView::PropNameIDView(JsPropertyIdRef propertyId) noexcept
     : m_propertyId{
-          make<facebook::jsi::PropNameID>(new(std::addressof(m_pointerStore)) ChakraPointerValueView(propertyId))} {}
+          make<facebook::jsi::PropNameID>(new (std::addressof(m_pointerStore)) ChakraPointerValueView(propertyId))} {}
 
 ChakraRuntime::PropNameIDView::~PropNameIDView() noexcept {}
 
