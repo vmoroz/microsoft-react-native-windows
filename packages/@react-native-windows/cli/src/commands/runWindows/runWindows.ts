@@ -111,6 +111,28 @@ let evaluateMSBuildPropsCallback:
   | (() => Record<string, string> | null)
   | undefined;
 
+function parseBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') {
+      return true;
+    }
+    if (normalized === 'false' || normalized === '0') {
+      return false;
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * The function run when calling `npx @react-native-community/cli run-windows`.
  * @param args Unprocessed args passed from react-native CLI.
@@ -310,6 +332,21 @@ async function runWindowsInternal(
     newInfo('Autolink step is skipped');
   }
 
+  const msBuildProps = build.parseMsBuildProps(options);
+  const msBuildUseHermes = parseBoolean(msBuildProps.UseHermes);
+  const windowsConfig = config.project.windows;
+  const configUseHermes = parseBoolean(
+    windowsConfig?.experimentalFeatures?.UseHermes,
+  );
+
+  let effectiveUseHermes = msBuildUseHermes;
+  if (effectiveUseHermes === undefined) {
+    effectiveUseHermes = configUseHermes;
+  }
+  if (effectiveUseHermes === undefined) {
+    effectiveUseHermes = true;
+  }
+
   if (options.build) {
     runWindowsPhase = 'Build';
     if (!slnFile) {
@@ -320,8 +357,6 @@ async function runWindowsInternal(
     }
 
     // Get build/deploy options
-    const msBuildProps = build.parseMsBuildProps(options);
-
     // Disable the autolink check since we just ran it
     msBuildProps.RunAutolinkCheck = 'false';
 
@@ -353,7 +388,7 @@ async function runWindowsInternal(
   }
 
   if (shouldLaunchPackager(options)) {
-    await deploy.startServerInNewWindow(options, verbose);
+    await deploy.startServerInNewWindow(options, verbose, effectiveUseHermes);
   }
 
   if (options.deploy) {

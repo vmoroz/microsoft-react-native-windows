@@ -500,6 +500,7 @@ export async function deployToDesktop(
 export function startServerInNewWindow(
   options: RunWindowsOptions,
   verbose: boolean,
+  useHermes?: boolean,
 ): Promise<void> {
   return new Promise(resolve => {
     http
@@ -512,19 +513,31 @@ export function startServerInNewWindow(
         resolve();
       })
       .on('error', () => {
-        launchServer(options, verbose);
+        launchServer(options, verbose, useHermes);
         resolve();
       });
   });
 }
 
-function launchServer(options: RunWindowsOptions, verbose: boolean) {
+function launchServer(
+  options: RunWindowsOptions,
+  verbose: boolean,
+  useHermes?: boolean,
+) {
   newSuccess('Starting the React-Native Server');
   const opts: SpawnOptions = {
     cwd: options.root,
     detached: true,
     stdio: verbose ? 'inherit' : 'ignore',
   };
+
+  if (useHermes !== undefined) {
+    const env: NodeJS.ProcessEnv = {...process.env};
+    const normalizedValue = useHermes ? 'true' : 'false';
+    env.USE_HERMES = normalizedValue;
+    env.RNW_USE_HERMES = normalizedValue;
+    opts.env = env;
+  }
 
   spawn('cmd.exe', ['/C', 'start npx @react-native-community/cli start'], opts);
 }
