@@ -8,9 +8,10 @@
 
 module.exports = () => ({
   presets: [
-    ['module:@react-native/babel-preset', { disableDeepImportWarnings: true }]
+    ['module:@react-native/babel-preset', {disableDeepImportWarnings: true}],
   ],
   plugins: [
-    "babel-plugin-transform-flow-enums",
-  ]
+    'babel-plugin-transform-flow-enums',
+    '@babel/plugin-transform-named-capturing-groups-regex',
+  ],
 });
