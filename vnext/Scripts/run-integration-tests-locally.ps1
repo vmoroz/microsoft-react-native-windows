@@ -19,8 +19,9 @@
 .PARAMETER NoTest
     Skip running the integration tests (useful for just building and launching the app)
 
+
 .PARAMETER LaunchOnly
-    Skip feature toggles, build, packager, and tests; only launches the app
+    Skip feature toggles, build, and tests; launches the app and starts the packager in debug mode with cache cleared
 
 .PARAMETER VerboseOutput
     Enable verbose MSBuild output for debugging build issues
@@ -58,7 +59,7 @@ $ErrorActionPreference = 'Stop'
 
 $launchOnlyMode = $LaunchOnly.IsPresent
 $skipBuild = $NoBuild.IsPresent -or $launchOnlyMode
-$skipPackager = $NoPackager.IsPresent -or $launchOnlyMode
+$skipPackager = $NoPackager.IsPresent # LaunchOnly mode does NOT skip packager
 $skipTest = $NoTest.IsPresent -or $launchOnlyMode
 
 # Define the configuration matrix
@@ -231,11 +232,11 @@ try {
         }
 
         if (-not $skipPackager) {
-            # Step 3: Start packager
+            # Step 3: Start packager with --reset-cache
             Write-Host ""
-            Write-Host "Step 3: Starting packager..." -ForegroundColor Yellow
-            Start-Process npm.cmd -ArgumentList "run", "start" -WorkingDirectory $integrationTestAppPath
-            Write-Host "  Packager started in background" -ForegroundColor Green
+            Write-Host "Step 3: Starting packager (debug mode, cache cleared)..." -ForegroundColor Yellow
+            Start-Process npm.cmd -ArgumentList "run", "start", "--", "--reset-cache" -WorkingDirectory $integrationTestAppPath
+            Write-Host "  Packager started in background with --reset-cache" -ForegroundColor Green
 
             # Step 4: Warm up the packager
             Write-Host ""
@@ -266,13 +267,9 @@ try {
             Write-Host "  Debugger UI launched in Chrome" -ForegroundColor Green
             Start-Sleep -Seconds 2
         }
-        elseif (-not $launchOnlyMode) {
-            Write-Host ""
-            Write-Host "Step 3-5: Skipping packager steps (NoPackager flag set)" -ForegroundColor Gray
-        }
         else {
             Write-Host ""
-            Write-Host "Step 3-5: LaunchOnly enabled, skipping packager steps" -ForegroundColor Gray
+            Write-Host "Step 3-5: Skipping packager steps (NoPackager flag set)" -ForegroundColor Gray
         }
 
         # Step 6: Launch the app
@@ -353,9 +350,50 @@ try {
             }
         }
 
-        # Step 3: Launch the app (release mode)
+        if (-not $skipPackager) {
+            # Step 3: Start packager with --reset-cache (release mode)
+            Write-Host ""
+            Write-Host "Step 3: Starting packager (release mode, cache cleared)..." -ForegroundColor Yellow
+            Start-Process npm.cmd -ArgumentList "run", "start", "--", "--reset-cache" -WorkingDirectory $integrationTestAppPath
+            Write-Host "  Packager started in background with --reset-cache" -ForegroundColor Green
+
+            # Step 4: Warm up the packager
+            Write-Host ""
+            Write-Host "Step 4: Warming up packager..." -ForegroundColor Yellow
+            $maxRetries = 60
+            $retryCount = 0
+            while ($retryCount -lt $maxRetries) {
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8081/index.bundle?platform=windows&dev=true" -TimeoutSec 5 | Out-Null
+                    Write-Host "  Packager is ready" -ForegroundColor Green
+                    break
+                }
+                catch {
+                    $retryCount++
+                    if ($retryCount -ge $maxRetries) {
+                        Write-Warning "Packager did not respond after $maxRetries attempts"
+                        break
+                    }
+                    Write-Host "  Waiting for packager... (attempt $retryCount/$maxRetries)" -ForegroundColor Gray
+                    Start-Sleep -Seconds 1
+                }
+            }
+
+            # Step 5: Launch debugger UI
+            Write-Host ""
+            Write-Host "Step 5: Launching debugger UI..." -ForegroundColor Yellow
+            Start-Process chrome "http://localhost:8081/debugger-ui/"
+            Write-Host "  Debugger UI launched in Chrome" -ForegroundColor Green
+            Start-Sleep -Seconds 2
+        }
+        else {
+            Write-Host ""
+            Write-Host "Step 3-5: Skipping packager steps (NoPackager flag set)" -ForegroundColor Gray
+        }
+
+        # Step 6: Launch the app (release mode)
         Write-Host ""
-        Write-Host "Step 3: Launching the app (Release)..." -ForegroundColor Yellow
+        Write-Host "Step 6: Launching the app (Release)..." -ForegroundColor Yellow
         $launchArgs = "windows --release --no-build $($matrix.DeployOptions) --no-packager --no-autolink --arch $($matrix.BuildPlatform) --logging"
         Write-Host "  Running: yarn $launchArgs" -ForegroundColor Gray
         $launchCmd = "yarn $launchArgs"
