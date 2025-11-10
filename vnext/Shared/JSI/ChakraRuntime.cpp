@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <unordered_set>
 
@@ -728,43 +729,198 @@ void ChakraRuntime::RewriteErrorMessage(JsValueRef jsError) {
   JsValueRef message{JS_INVALID_REFERENCE};
   JsErrorCode errorCode = JsGetProperty(jsError, m_propertyId.message, &message);
   if (errorCode != JsNoError) {
-    // If the 'message' property getter throws, then we clear the exception and ignore it.
     JsValueRef ignoreJSError{JS_INVALID_REFERENCE};
     JsGetAndClearException(&ignoreJSError);
-  } else if (GetValueType(message) == JsValueType::JsString) {
-    // JSI unit tests expect V8 or JSC like message for stack overflow.
-    std::wstring_view errorMessage = StringToPointer(message);
-    if (errorMessage == L"Out of stack space") {
-      SetProperty(jsError, m_propertyId.message, PointerToString(L"RangeError : Maximum call stack size exceeded"));
-    } else if (errorMessage == L"Syntax error") {
-      JsValueRef result;
-      JsPropertyIdRef property;
+    return;
+  }
 
-      JsGetPropertyIdFromName(L"line", &property);
-      if (JsGetProperty(jsError, property, &result) != JsNoError) {
-        // If the 'line' property getter throws, clear the exception and ignore it.
-        JsValueRef ignoreJSError{JS_INVALID_REFERENCE};
-        JsGetAndClearException(&ignoreJSError);
-        return;
-      }
+  if (GetValueType(message) != JsValueType::JsString) {
+    return;
+  }
 
-      // Line numbers start from zero
-      const int32_t line = NumberToInt(result) + 1;
-      wchar_t buf[1024] = {};
+  std::wstring rewrittenMessage{StringToPointer(message)};
+  bool messageUpdated{false};
 
-      JsGetPropertyIdFromName(L"column", &property);
-      if (JsGetProperty(jsError, property, &result) != JsNoError) {
-        // If the 'column' property getter throws, clear the exception and ignore it.
-        JsValueRef ignoreJSError{JS_INVALID_REFERENCE};
-        JsGetAndClearException(&ignoreJSError);
-        StringCchPrintf(buf, std::size(buf), L"Syntax error at line %i", line);
-      } else {
-        const int32_t column = NumberToInt(result);
-        StringCchPrintf(buf, std::size(buf), L"Syntax error at line %i column %i", line, column);
-      }
+  auto clearIfException = []() {
+    JsValueRef ignore{JS_INVALID_REFERENCE};
+    JsGetAndClearException(&ignore);
+  };
 
-      SetProperty(jsError, m_propertyId.message, PointerToString(buf));
+  auto tryGetProperty = [&](JsValueRef target, const wchar_t *name, JsValueRef &out) -> bool {
+    JsPropertyIdRef propertyId{};
+    if (JsGetPropertyIdFromName(name, &propertyId) != JsNoError) {
+      return false;
     }
+
+    JsValueRef propertyValue{JS_INVALID_REFERENCE};
+    JsErrorCode getPropResult = JsGetProperty(target, propertyId, &propertyValue);
+    if (getPropResult != JsNoError) {
+      clearIfException();
+      return false;
+    }
+
+    out = propertyValue;
+    return true;
+  };
+
+  auto tryGetString = [&](JsValueRef target,
+                          std::initializer_list<const wchar_t *> names) -> std::optional<std::wstring> {
+    for (auto name : names) {
+      JsValueRef value{JS_INVALID_REFERENCE};
+      if (!tryGetProperty(target, name, value)) {
+        continue;
+      }
+
+      if (GetValueType(value) == JsValueType::JsString) {
+        return std::wstring{StringToPointer(value)};
+      }
+    }
+
+    return std::nullopt;
+  };
+
+  auto tryGetInt = [&](JsValueRef target, const wchar_t *name) -> std::optional<int32_t> {
+    JsValueRef value{JS_INVALID_REFERENCE};
+    if (!tryGetProperty(target, name, value)) {
+      return std::nullopt;
+    }
+
+    if (GetValueType(value) != JsValueType::JsNumber) {
+      return std::nullopt;
+    }
+
+    return NumberToInt(value);
+  };
+
+  std::wstring_view errorMessageView{rewrittenMessage};
+  if (errorMessageView == L"Out of stack space" ||
+      errorMessageView.find(L"Maximum call stack") != std::wstring_view::npos) {
+    rewrittenMessage.assign(L"RangeError : Maximum call stack size exceeded");
+    messageUpdated = true;
+  } else if (errorMessageView == L"Syntax error") {
+    auto line = tryGetInt(jsError, L"line");
+    if (!line) {
+      return;
+    }
+
+    const int32_t humanLine = *line + 1;
+    auto column = tryGetInt(jsError, L"column");
+
+    wchar_t buffer[1024] = {};
+    if (column) {
+      StringCchPrintf(buffer, std::size(buffer), L"Syntax error at line %i column %i", humanLine, *column);
+    } else {
+      StringCchPrintf(buffer, std::size(buffer), L"Syntax error at line %i", humanLine);
+    }
+
+    rewrittenMessage.assign(buffer);
+    messageUpdated = true;
+  }
+
+  std::wstring extraDetails;
+  auto appendStringDetail = [&](std::wstring_view label, const std::wstring &value) {
+    if (value.empty()) {
+      return;
+    }
+
+    if (extraDetails.empty()) {
+      extraDetails.assign(L"Additional error details:\n");
+    }
+
+    extraDetails.append(L"  ");
+    extraDetails.append(label);
+    extraDetails.append(L": ");
+    extraDetails.append(value);
+    extraDetails.push_back(L'\n');
+  };
+
+  auto appendIntDetail = [&](std::wstring_view label, int32_t value) {
+    if (extraDetails.empty()) {
+      extraDetails.assign(L"Additional error details:\n");
+    }
+
+    extraDetails.append(L"  ");
+    extraDetails.append(label);
+    extraDetails.append(L": ");
+    extraDetails.append(std::to_wstring(value));
+    extraDetails.push_back(L'\n');
+  };
+
+  if (auto description = tryGetString(jsError, {L"description"}); description) {
+    if (!description->empty() && description->compare(rewrittenMessage) != 0) {
+      appendStringDetail(L"description", *description);
+    }
+  }
+
+  if (auto url = tryGetString(jsError, {L"sourceURL", L"url", L"fileName"}); url) {
+    appendStringDetail(L"url", *url);
+  }
+
+  if (auto line = tryGetInt(jsError, L"line"); line) {
+    appendIntDetail(L"line", *line + 1);
+  }
+
+  if (auto column = tryGetInt(jsError, L"column"); column) {
+    appendIntDetail(L"column", *column);
+  }
+
+  if (auto errorCodeValue = tryGetInt(jsError, L"errorCode"); errorCodeValue) {
+    std::wstringstream stream;
+    stream << L"0x" << std::hex << std::uppercase << *errorCodeValue;
+    appendStringDetail(L"errorCode", stream.str());
+  }
+
+  if (auto source = tryGetString(jsError, {L"source"}); source) {
+    constexpr size_t maxSnippetLength = 200;
+    if (source->length() > maxSnippetLength) {
+      source->erase(maxSnippetLength);
+      source->append(L"...");
+    }
+    appendStringDetail(L"source", *source);
+  }
+
+  if (auto innerErrorMessage = [&]() -> std::optional<std::wstring> {
+        JsValueRef inner{JS_INVALID_REFERENCE};
+        if (!tryGetProperty(jsError, L"innerError", inner)) {
+          return std::nullopt;
+        }
+
+        JsValueType valueType = GetValueType(inner);
+        if (valueType != JsValueType::JsError && valueType != JsValueType::JsObject) {
+          return std::nullopt;
+        }
+
+        JsValueRef innerMessage{JS_INVALID_REFERENCE};
+        if (JsGetProperty(inner, m_propertyId.message, &innerMessage) != JsNoError) {
+          clearIfException();
+          return std::nullopt;
+        }
+
+        if (GetValueType(innerMessage) != JsValueType::JsString) {
+          return std::nullopt;
+        }
+
+        return std::wstring{StringToPointer(innerMessage)};
+      }();
+      innerErrorMessage) {
+    appendStringDetail(L"innerError", *innerErrorMessage);
+  }
+
+  if (!extraDetails.empty()) {
+    if (extraDetails.back() == L'\n') {
+      extraDetails.pop_back();
+    }
+
+    if (!rewrittenMessage.empty() && rewrittenMessage.back() != L'\n') {
+      rewrittenMessage.push_back(L'\n');
+    }
+
+    rewrittenMessage.append(extraDetails);
+    messageUpdated = true;
+  }
+
+  if (messageUpdated) {
+    SetProperty(jsError, m_propertyId.message, PointerToString(rewrittenMessage));
   }
 }
 
