@@ -40,7 +40,7 @@ App::App() noexcept {
   InstanceSettings().UseFastRefresh(false);
 #else
   JavaScriptBundleFile(L"index");
-  InstanceSettings().UseWebDebugger(true);
+  //InstanceSettings().UseWebDebugger(true);
   InstanceSettings().UseFastRefresh(true);
 #endif
 
