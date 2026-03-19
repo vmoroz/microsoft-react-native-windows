@@ -19,6 +19,13 @@ extends:
       name: Azure-Pipelines-1ESPT-ExDShared
       image: windows-latest
       os: windows
+    sdl:
+      credscan:
+          suppressionsFile: $(Build.SourcesDirectory)\.ado\config\CredScanSuppressions.json
+      spotBugs:
+          enabled: false
+      prefast:
+          enabled: false
     stages:
     - stage: RNWPublish
       jobs:
