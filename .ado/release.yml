@@ -76,17 +76,22 @@ extends:
           displayName: Log all pipeline variables
 
         - powershell: |
-            $buildReason = "$(Build.Reason)"
-            $sourceMessage = "$(Build.SourceVersionMessage)"
-            $publishRunName = "$(resources.pipeline.Publish.runName)"
-            $sourceBranch = "$(Build.SourceBranch)" -replace '^refs/heads/', '' -replace '["/:<>\\|?@*]', '_'
+            $buildReason = $env:BUILD_REASON
+            # Use only the first line of the commit message
+            $sourceMessage = ($env:SOURCE_MESSAGE -split "`n")[0].Trim()
+            $publishRunName = $env:PUBLISH_RUN_NAME
+            $sourceBranch = $env:SOURCE_BRANCH -replace '^refs/heads/', ''
 
             $shouldRelease = $false
             $buildNumber = ""
 
             if ($buildReason -eq "Manual") {
               $shouldRelease = $true
-              $buildNumber = "Manual - $publishRunName ($sourceBranch)"
+              if ($publishRunName) {
+                $buildNumber = "Manual - $publishRunName ($sourceBranch)"
+              } else {
+                $buildNumber = "Manual ($sourceBranch)"
+              }
             }
             elseif ($sourceMessage.StartsWith("RELEASE:")) {
               $shouldRelease = $true
@@ -103,7 +108,9 @@ extends:
             }
 
             # Sanitize: ADO build numbers cannot contain " / : < > \ | ? @ *
+            # and cannot end with '.'
             $buildNumber = $buildNumber -replace '["/:<>\\|?@*]', '_'
+            $buildNumber = $buildNumber.TrimEnd('.')
 
             Write-Host "shouldRelease: $shouldRelease"
             Write-Host "buildNumber:   $buildNumber"
@@ -112,3 +119,8 @@ extends:
             Write-Host "##vso[task.setvariable variable=shouldRelease;isOutput=true]$shouldRelease"
           name: gate
           displayName: Determine release eligibility and set build number
+          env:
+            BUILD_REASON: $(Build.Reason)
+            SOURCE_MESSAGE: $(Build.SourceVersionMessage)
+            PUBLISH_RUN_NAME: $(resources.pipeline.Publish.runName)
+            SOURCE_BRANCH: $(Build.SourceBranch)
