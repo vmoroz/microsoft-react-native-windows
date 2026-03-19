@@ -88,14 +88,14 @@ extends:
             if ($buildReason -eq "Manual") {
               $shouldRelease = $true
               if ($publishRunName) {
-                $buildNumber = "Manual - $publishRunName ($sourceBranch)"
+                $buildNumber = "$publishRunName ($sourceBranch)"
               } else {
-                $buildNumber = "Manual ($sourceBranch)"
+                $buildNumber = "Release ($sourceBranch)"
               }
             }
             elseif ($sourceMessage.StartsWith("RELEASE:")) {
               $shouldRelease = $true
-              $buildNumber = "Release $publishRunName ($sourceBranch)"
+              $buildNumber = "$publishRunName ($sourceBranch)"
             }
             else {
               $shouldRelease = $false
