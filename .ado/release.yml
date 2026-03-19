@@ -79,7 +79,7 @@ extends:
             $buildReason = "$(Build.Reason)"
             $sourceMessage = "$(Build.SourceVersionMessage)"
             $publishRunName = "$(resources.pipeline.Publish.runName)"
-            $sourceBranch = "$(Build.SourceBranch)" -replace '^refs/heads/', ''
+            $sourceBranch = "$(Build.SourceBranch)" -replace '^refs/heads/', '' -replace '["/:<>\\|?@*]', '_'
 
             $shouldRelease = $false
             $buildNumber = ""
