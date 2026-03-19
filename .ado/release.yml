@@ -86,7 +86,7 @@ extends:
 
             if ($buildReason -eq "Manual") {
               $shouldRelease = $true
-              $buildNumber = "Manual: $publishRunName ($sourceBranch)"
+              $buildNumber = "Manual - $publishRunName ($sourceBranch)"
             }
             elseif ($sourceMessage.StartsWith("RELEASE:")) {
               $shouldRelease = $true
@@ -99,8 +99,11 @@ extends:
               if ($shortMsg.Length -gt 60) {
                 $shortMsg = $shortMsg.Substring(0, 57) + "..."
               }
-              $buildNumber = "Skipped: $shortMsg ($sourceBranch)"
+              $buildNumber = "Skipped - $shortMsg ($sourceBranch)"
             }
+
+            # Sanitize: ADO build numbers cannot contain " / : < > \ | ? @ *
+            $buildNumber = $buildNumber -replace '["/:<>\\|?@*]', '_'
 
             Write-Host "shouldRelease: $shouldRelease"
             Write-Host "buildNumber:   $buildNumber"
