@@ -82,20 +82,25 @@ extends:
             $publishRunName = $env:PUBLISH_RUN_NAME
             $sourceBranch = $env:SOURCE_BRANCH -replace '^refs/heads/', ''
 
+            # Extract the datestamp (e.g. "20260319.4") from the original build number
+            # which has the format "RNW NuGet Release 20260319.4"
+            $originalBuildNumber = $env:BUILD_BUILDNUMBER
+            $dateStamp = if ($originalBuildNumber -match '(\d{8}\.\d+)$') { $Matches[1] } else { "" }
+
             $shouldRelease = $false
             $buildNumber = ""
 
             if ($buildReason -eq "Manual") {
               $shouldRelease = $true
               if ($publishRunName) {
-                $buildNumber = "$publishRunName ($sourceBranch)"
+                $buildNumber = "$publishRunName ($sourceBranch) - $dateStamp"
               } else {
-                $buildNumber = "Release ($sourceBranch)"
+                $buildNumber = "Release ($sourceBranch) - $dateStamp"
               }
             }
             elseif ($sourceMessage.StartsWith("RELEASE:")) {
               $shouldRelease = $true
-              $buildNumber = "$publishRunName ($sourceBranch)"
+              $buildNumber = "$publishRunName ($sourceBranch) - $dateStamp"
             }
             else {
               $shouldRelease = $false
@@ -104,7 +109,7 @@ extends:
               if ($shortMsg.Length -gt 60) {
                 $shortMsg = $shortMsg.Substring(0, 57) + "..."
               }
-              $buildNumber = "Skipped - $shortMsg ($sourceBranch)"
+              $buildNumber = "Skipped - $shortMsg ($sourceBranch) - $dateStamp"
             }
 
             # Sanitize: ADO build numbers cannot contain " / : < > \ | ? @ *
@@ -121,6 +126,7 @@ extends:
           displayName: Determine release eligibility and set build number
           env:
             BUILD_REASON: $(Build.Reason)
+            BUILD_BUILDNUMBER: $(Build.BuildNumber)
             SOURCE_MESSAGE: $(Build.SourceVersionMessage)
             PUBLISH_RUN_NAME: $(resources.pipeline.Publish.runName)
             SOURCE_BRANCH: $(resources.pipeline.Publish.sourceBranch)
