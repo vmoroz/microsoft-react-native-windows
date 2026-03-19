@@ -123,4 +123,4 @@ extends:
             BUILD_REASON: $(Build.Reason)
             SOURCE_MESSAGE: $(Build.SourceVersionMessage)
             PUBLISH_RUN_NAME: $(resources.pipeline.Publish.runName)
-            SOURCE_BRANCH: $(Build.SourceBranch)
+            SOURCE_BRANCH: $(resources.pipeline.Publish.sourceBranch)
