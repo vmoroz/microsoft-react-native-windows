@@ -9,6 +9,7 @@
 # with incorrect metadata (wrong commit message and branch).
 #
 
+# Remove this comment next time
 name: RNW NuGet Release $(Date:yyyyMMdd).$(Rev:r)
 
 trigger: none
