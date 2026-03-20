@@ -23,9 +23,11 @@ resources:
       branches:
         include:
         - main
-        - refs/heads/main
-        - '*-stable'
-        - 'refs/heads/*-stable'
+        - '0.74-stable'
+        - '0.81-stable'
+        - '0.82-stable'
+        - '0.83-stable'
+        - '0.84-stable'
   repositories:
   - repository: 1ESPipelineTemplates
     type: git
