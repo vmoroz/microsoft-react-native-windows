@@ -131,6 +131,14 @@ extends:
             PUBLISH_RUN_NAME: $(resources.pipeline.Publish.runName)
             SOURCE_BRANCH: $(resources.pipeline.Publish.sourceBranch)
 
+        - script: echo Proceeding with release
+          displayName: RELEASING - proceeding to publish
+          condition: eq(variables['gate.shouldRelease'], 'True')
+
+        - script: echo Skipping release
+          displayName: SKIPPED - not a RELEASE commit
+          condition: eq(variables['gate.shouldRelease'], 'False')
+
     - stage: Release
       displayName: Publish artifacts
       dependsOn: Gate
