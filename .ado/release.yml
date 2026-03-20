@@ -144,20 +144,14 @@ extends:
       displayName: Publish artifacts
       dependsOn: Gate
       variables:
-        gateResult: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
+        shouldRelease: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
+      condition: and(succeeded(), eq(variables['shouldRelease'], 'True'))
       jobs:
       - job: DebugGateOutput
         displayName: Debug gate output variable
         steps:
         - checkout: none
         - script: |
-            echo == Stage-level variable ==
-            echo gateResult: $(gateResult)
-            echo.
-            echo == Direct stageDependencies access ==
-            echo shouldRelease: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
-            echo.
-            echo == Build variables for reference ==
+            echo shouldRelease: $(shouldRelease)
             echo Build.Reason: $(Build.Reason)
-            echo Build.SourceVersionMessage: $(Build.SourceVersionMessage)
           displayName: Print gate output variable
