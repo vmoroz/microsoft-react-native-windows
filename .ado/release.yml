@@ -145,7 +145,7 @@ extends:
       dependsOn: Gate
       variables:
         shouldRelease: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
-      condition: and(succeeded(), eq(variables['shouldRelease'], 'True'))
+      condition: eq(variables['shouldRelease'], 'True')
       jobs:
       - job: DebugGateOutput
         displayName: Debug gate output variable
