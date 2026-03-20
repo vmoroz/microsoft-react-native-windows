@@ -22,10 +22,7 @@ resources:
     trigger:
       branches:
         include:
-        - main
-        - refs/heads/main
-        - '*-stable'
-        - 'refs/heads/*-stable'
+        - user/vmorozov/1es-pt-migration-publish
   repositories:
   - repository: 1ESPipelineTemplates
     type: git
