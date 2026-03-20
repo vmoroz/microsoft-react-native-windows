@@ -143,9 +143,7 @@ extends:
     - stage: Release
       displayName: Publish artifacts
       dependsOn: Gate
-      variables:
-        shouldRelease: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
-      condition: eq(variables['shouldRelease'], 'True')
+      condition: eq(dependencies.Gate.outputs['Evaluate.gate.shouldRelease'], 'True')
       jobs:
       - job: DebugGateOutput
         displayName: Debug gate output variable
