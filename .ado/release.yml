@@ -147,6 +147,8 @@ extends:
       jobs:
       - job: DebugGateOutput
         displayName: Debug gate output variable
+        variables:
+          shouldRelease: $[ stageDependencies.Gate.Evaluate.outputs['gate.shouldRelease'] ]
         steps:
         - checkout: none
         - script: |
