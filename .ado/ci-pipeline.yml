@@ -1,0 +1,18 @@
+#
+# The CI pipeline entry point.
+# Extends build-template.yml with MustPublish: true to produce signed artifacts.
+#
+
+name: 0.0.$(Date:yyMM.d)$(Rev:rrr)
+
+trigger: none
+pr: none
+
+variables:
+  - template: variables/windows.yml
+  - group: RNW Secrets
+
+extends:
+  template: build-template.yml@self
+  parameters:
+    MustPublish: true
