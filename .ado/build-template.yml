@@ -8,6 +8,7 @@
 # Revert to the previous commit to restore the real pipeline.
 #
 
+# Remove this comment next time (it was added to add a fake change)
 parameters:
 - name: MustPublish
   type: boolean
