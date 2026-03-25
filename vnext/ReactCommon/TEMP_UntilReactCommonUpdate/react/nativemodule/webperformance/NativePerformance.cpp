@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -80,9 +79,6 @@ NativePerformanceEntry toNativePerformanceEntry(const PerformanceEntry& entry) {
     nativeEntry.responseStart = resourceEntry.responseStart;
     nativeEntry.responseEnd = resourceEntry.responseEnd;
     nativeEntry.responseStatus = resourceEntry.responseStatus;
-    nativeEntry.contentType = resourceEntry.contentType;
-    nativeEntry.encodedBodySize = resourceEntry.encodedBodySize;
-    nativeEntry.decodedBodySize = resourceEntry.decodedBodySize;
   }
 
   return nativeEntry;
@@ -408,7 +404,6 @@ void NativePerformance::clearEventCountsForTesting(jsi::Runtime& /*rt*/) {
 }
 
 } // namespace facebook::react
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif

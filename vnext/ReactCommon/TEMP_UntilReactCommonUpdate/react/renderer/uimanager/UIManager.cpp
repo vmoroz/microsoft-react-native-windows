@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -75,12 +74,10 @@ std::shared_ptr<ShadowNode> UIManager::createNode(
   auto fallbackDescriptor =
       componentDescriptorRegistry_->getFallbackComponentDescriptor();
 
-  PropsParserContext propsParserContext{surfaceId, *contextContainer_};
+  PropsParserContext propsParserContext{surfaceId, *contextContainer_.get()};
 
   auto family = componentDescriptor.createFamily(
-      {.tag = tag,
-       .surfaceId = surfaceId,
-       .instanceHandle = std::move(instanceHandle)});
+      {tag, surfaceId, std::move(instanceHandle)});
   const auto props = componentDescriptor.cloneProps(
       propsParserContext, nullptr, std::move(rawProps));
   const auto state = componentDescriptor.createInitialState(props, family);
@@ -118,7 +115,7 @@ std::shared_ptr<ShadowNode> UIManager::cloneNode(
       "UIManager::cloneNode", "componentName", shadowNode.getComponentName());
 
   PropsParserContext propsParserContext{
-      shadowNode.getFamily().getSurfaceId(), *contextContainer_};
+      shadowNode.getFamily().getSurfaceId(), *contextContainer_.get()};
 
   auto& componentDescriptor = shadowNode.getComponentDescriptor();
   auto& family = shadowNode.getFamily();
@@ -462,14 +459,14 @@ void UIManager::setNativeProps_DEPRECATED(
                         componentDescriptorRegistry_->at(
                             shadowNode->getComponentHandle());
                     PropsParserContext propsParserContext{
-                        family.getSurfaceId(), *contextContainer_};
+                        family.getSurfaceId(), *contextContainer_.get()};
                     auto props = componentDescriptor.cloneProps(
                         propsParserContext,
                         getShadowNodeInSubtree(*shadowNode, ancestorShadowNode)
                             ->getProps(),
                         RawProps(rawProps));
 
-                    return oldShadowNode.clone({/* .props = */ .props = props});
+                    return oldShadowNode.clone({/* .props = */ props});
                   });
 
               return std::static_pointer_cast<RootShadowNode>(rootNode);
@@ -685,16 +682,6 @@ void UIManager::setNativeAnimatedDelegate(
   nativeAnimatedDelegate_ = delegate;
 }
 
-void UIManager::unstable_setAnimationBackend(
-    std::weak_ptr<UIManagerAnimationBackend> animationBackend) {
-  animationBackend_ = animationBackend;
-}
-
-std::weak_ptr<UIManagerAnimationBackend>
-UIManager::unstable_getAnimationBackend() {
-  return animationBackend_;
-}
-
 void UIManager::animationTick() const {
   if (animationDelegate_ != nullptr &&
       animationDelegate_->shouldAnimateFrame()) {
@@ -740,7 +727,6 @@ void UIManager::setOnSurfaceStartCallback(
 }
 
 } // namespace facebook::react
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif

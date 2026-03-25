@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -23,11 +22,11 @@ namespace facebook::react {
 std::string JSExecutor::getSyntheticBundlePath(
     uint32_t bundleId,
     const std::string& bundlePath) {
-#ifndef RCT_REMOVE_LEGACY_ARCH
+#ifndef RCT_FIT_RM_OLD_RUNTIME
   if (bundleId == RAMBundleRegistry::MAIN_BUNDLE_ID) {
     return bundlePath;
   }
-#endif // RCT_REMOVE_LEGACY_ARCH
+#endif // RCT_FIT_RM_OLD_RUNTIME
 
   std::array<char, 32> buffer{};
   std::snprintf(buffer.data(), buffer.size(), "seg-%u.js", bundleId);
@@ -43,7 +42,6 @@ JSExecutor::getRuntimeTargetDelegate() {
 }
 
 } // namespace facebook::react
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif

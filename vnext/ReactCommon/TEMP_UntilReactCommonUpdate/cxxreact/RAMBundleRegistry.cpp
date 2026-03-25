@@ -5,14 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
 #endif
 #include "RAMBundleRegistry.h"
 
-#ifndef RCT_REMOVE_LEGACY_ARCH
+#ifndef RCT_FIT_RM_OLD_RUNTIME
 
 #include <folly/String.h>
 
@@ -75,8 +74,8 @@ JSModulesUnbundle::Module RAMBundleRegistry::getModule(
   }
 
   return {
-      .name = "seg-" + std::to_string(bundleId) + '_' + module.name,
-      .code = std::move(module.code),
+      "seg-" + std::to_string(bundleId) + '_' + module.name,
+      std::move(module.code),
   };
 }
 
@@ -86,8 +85,7 @@ JSModulesUnbundle* RAMBundleRegistry::getBundle(uint32_t bundleId) const {
 
 } // namespace facebook::react
 
-#endif // RCT_REMOVE_LEGACY_ARCH
-
+#endif // RCT_FIT_RM_OLD_RUNTIME
 #if _MSC_VER
 #pragma warning(pop)
 #endif

@@ -5,14 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
 #endif
 #include "JSIndexedRAMBundle.h"
 
-#ifndef RCT_REMOVE_LEGACY_ARCH
+#ifndef RCT_FIT_RM_OLD_RUNTIME
 
 #include <glog/logging.h>
 #include <fstream>
@@ -138,8 +137,7 @@ void JSIndexedRAMBundle::readBundle(
 
 } // namespace facebook::react
 
-#endif // RCT_REMOVE_LEGACY_ARCH
-
+#endif // RCT_FIT_RM_OLD_RUNTIME
 #if _MSC_VER
 #pragma warning(pop)
 #endif

@@ -5,14 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
 #endif
 #include "ModuleRegistry.h"
 
-#ifndef RCT_REMOVE_LEGACY_ARCH
+#ifndef RCT_FIT_RM_OLD_RUNTIME
 
 #include <glog/logging.h>
 #include <reactperflogger/BridgeNativeModulePerfLogger.h>
@@ -195,7 +194,7 @@ std::optional<ModuleConfig> ModuleRegistry::getConfig(const std::string& name) {
     // no constants or methods
     return std::nullopt;
   } else {
-    return ModuleConfig{.index = index, .config = std::move(config)};
+    return ModuleConfig{index, std::move(config)};
   }
 }
 
@@ -249,8 +248,7 @@ MethodCallResult ModuleRegistry::callSerializableNativeHook(
 
 } // namespace facebook::react
 
-#endif // RCT_REMOVE_LEGACY_ARCH
-
+#endif // RCT_FIT_RM_OLD_RUNTIME
 #if _MSC_VER
 #pragma warning(pop)
 #endif

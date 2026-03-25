@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -30,7 +29,7 @@ using namespace facebook::jsi;
 
 namespace facebook::react {
 
-#ifndef RCT_REMOVE_LEGACY_ARCH
+#ifndef RCT_FIT_RM_OLD_RUNTIME
 
 class JSIExecutor::NativeModuleProxy : public jsi::HostObject {
  public:
@@ -50,10 +49,7 @@ class JSIExecutor::NativeModuleProxy : public jsi::HostObject {
     return nativeModules->getModule(rt, name);
   }
 
-  void set(
-      Runtime& /*unused*/,
-      const PropNameID& /*name*/,
-      const Value& /*value*/) override {
+  void set(Runtime&, const PropNameID&, const Value&) override {
     throw std::runtime_error(
         "Unable to put on NativeModules: Operation unsupported");
   }
@@ -79,9 +75,8 @@ JSIExecutor::JSIExecutor(
     RuntimeInstaller runtimeInstaller)
     : runtime_(runtime),
       delegate_(delegate),
-      nativeModules_(
-          std::make_shared<JSINativeModules>(
-              delegate ? delegate->getModuleRegistry() : nullptr)),
+      nativeModules_(std::make_shared<JSINativeModules>(
+          delegate ? delegate->getModuleRegistry() : nullptr)),
       moduleRegistry_(delegate ? delegate->getModuleRegistry() : nullptr),
       scopedTimeoutInvoker_(scopedTimeoutInvoker),
       runtimeInstaller_(runtimeInstaller) {
@@ -274,9 +269,8 @@ void JSIExecutor::invokeCallback(
     ret = invokeCallbackAndReturnFlushedQueue_->call(
         *runtime_, callbackId, valueFromDynamic(*runtime_, arguments));
   } catch (...) {
-    std::throw_with_nested(
-        std::runtime_error(
-            "Error invoking callback " + std::to_string(callbackId)));
+    std::throw_with_nested(std::runtime_error(
+        "Error invoking callback " + std::to_string(callbackId)));
   }
 
   callNativeModules(ret, true);
@@ -533,7 +527,7 @@ Value JSIExecutor::globalEvalWithSourceUrl(const Value* args, size_t count) {
       std::make_unique<StringBuffer>(std::move(code)), url);
 }
 
-#else // RCT_REMOVE_LEGACY_ARCH
+#else // RCT_FIT_RM_OLD_RUNTIME
 
 JSIExecutor::JSIExecutor(
     std::shared_ptr<jsi::Runtime> runtime,
@@ -580,7 +574,7 @@ void JSIExecutor::handleMemoryPressure(int pressureLevel) {}
 
 void JSIExecutor::flush() {}
 
-#endif // RCT_REMOVE_LEGACY_ARCH
+#endif // RCT_FIT_RM_OLD_RUNTIME
 
 void bindNativeLogger(Runtime& runtime, Logger logger) {
   runtime.global().setProperty(
@@ -623,7 +617,6 @@ void bindNativePerformanceNow(Runtime& runtime) {
 }
 
 } // namespace facebook::react
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif

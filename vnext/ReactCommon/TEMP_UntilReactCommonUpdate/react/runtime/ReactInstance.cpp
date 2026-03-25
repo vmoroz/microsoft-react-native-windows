@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -20,7 +19,6 @@
 #include <cxxreact/TraceSection.h>
 #include <glog/logging.h>
 #include <jsi/JSIDynamic.h>
-#include <jsi/hermes.h>
 #include <jsi/instrumentation.h>
 #include <jsinspector-modern/HostTarget.h>
 #include <jsireact/JSIExecutor.h>
@@ -246,21 +244,9 @@ void ReactInstance::loadScript(
     if (hasLogger) {
       ReactMarker::logTaggedMarkerBridgeless(
           ReactMarker::RUN_JS_BUNDLE_START, scriptName.c_str());
-      ReactMarker::logMarkerBridgeless(ReactMarker::INIT_REACT_RUNTIME_START);
-      ReactMarker::logMarkerBridgeless(ReactMarker::APP_STARTUP_START);
     }
 
-    // Check if the shermes unit is avaliable.
-    auto* shUnitAPI = jsi::castInterface<hermes::IHermesSHUnit>(&runtime);
-    auto* shUnitCreator = shUnitAPI ? shUnitAPI->getSHUnitCreator() : nullptr;
-    if (shUnitCreator) {
-      LOG(WARNING) << "ReactInstance: evaluateSHUnit";
-      auto* hermesAPI = jsi::castInterface<hermes::IHermes>(&runtime);
-      hermesAPI->evaluateSHUnit(shUnitCreator);
-    } else {
-      LOG(WARNING) << "ReactInstance: evaluateJavaScript() with JS bundle";
-      runtime.evaluateJavaScript(buffer, sourceURL);
-    }
+    runtime.evaluateJavaScript(buffer, sourceURL);
 
     /**
      * TODO(T183610671): We need a safe/reliable way to enable the js
@@ -696,7 +682,6 @@ void* ReactInstance::getJavaScriptContext() {
 }
 
 } // namespace facebook::react
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif

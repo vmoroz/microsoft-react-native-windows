@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-
 #if _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // deprecated APIs
@@ -143,7 +142,6 @@ double StartupLogger::getAppStartupEndTime() {
 }
 
 } // namespace facebook::react::ReactMarker
-
 #if _MSC_VER
 #pragma warning(pop)
 #endif
