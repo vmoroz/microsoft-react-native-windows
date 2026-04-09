@@ -5,6 +5,7 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)folly.pch</PrecompiledHeaderOutputFile>
+      <ObjectFileName>$(IntDir)folly_pch.obj</ObjectFileName>
       <CompileAsWinRT>false</CompileAsWinRT>
       <PreprocessorDefinitions>FOLLY_CFG_NO_COROUTINES;FOLLY_NO_CONFIG;NOMINMAX;_CRT_SECURE_NO_WARNINGS;WINAPI_PARTITION_APP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DisableSpecificWarnings>4251;4293;4305;4800;4804;4310;%(DisableSpecificWarnings)</DisableSpecificWarnings>
@@ -24,7 +25,9 @@
     <ClCompile Include="$(ExternalDir)folly\folly\lang\SafeAssert.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\lang\ToAscii.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\json\json_pointer.cpp" />
-    <ClCompile Include="$(ExternalDir)folly\folly\Format.cpp" />
+    <ClCompile Include="$(ExternalDir)folly\folly\Format.cpp">
+      <ObjectFileName>$(IntDir)folly_Format.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="$(ExternalDir)folly\folly\String.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\container\detail\F14Table.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\Conv.cpp" />
@@ -39,7 +42,9 @@
     <ClCompile Include="$(ExternalDir)folly\folly\Unicode.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\memory\detail\MallocImpl.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\memory\SanitizeLeak.cpp" />
+    <ClCompile Include="$(ExternalDir)folly\folly\lang\CString.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\lang\Exception.cpp" />
+    <ClCompile Include="$(ExternalDir)folly\folly\detail\SplitStringSimd.cpp" />
     <!-- Desktop-only: SysMman.cpp (was in FollyWin32 project) -->
     <ClCompile Include="$(ExternalDir)folly\folly\portability\SysMman.cpp" Condition="'$(AppContainerApplication)' != 'true'">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
