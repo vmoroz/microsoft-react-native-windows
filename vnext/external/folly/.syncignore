@@ -1,0 +1,10 @@
+/sync-config.json
+/.syncignore
+/sync-instructions.md
+/cgmanifest.json
+/folly/test/
+/folly/experimental/
+/folly/docs/
+/CMakeLists.txt
+/CMake/
+/build/
