@@ -1,0 +1,7 @@
+{
+  "type": "patch",
+  "comment": "Move CI, Release, and feed warm-up pipelines to the office/ISS ADO project",
+  "packageName": "react-native-windows",
+  "email": "vmorozov@microsoft.com",
+  "dependentChangeType": "patch"
+}
