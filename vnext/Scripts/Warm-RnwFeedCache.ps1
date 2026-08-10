@@ -53,6 +53,9 @@
 .PARAMETER SkipNuGet
   Skip the NuGet warm pass.
 
+.PARAMETER SkipBuildTools
+  Skip the pipeline build-tools warm pass (needed only by Classic-yarn branches).
+
 .PARAMETER KeepWorkDir
   Keep the work dir instead of deleting it (for debugging).
 
@@ -78,6 +81,7 @@ param(
   [switch]$SkipLib,
   [switch]$SkipApp,
   [switch]$SkipNuGet,
+  [switch]$SkipBuildTools,
   [switch]$KeepWorkDir
 )
 
@@ -296,10 +300,28 @@ function Warm-NuGet {
   Write-Host "Saved $($refs.Count) NuGet package(s)." -ForegroundColor Green
 }
 
+# Classic-yarn branches (0.81-0.84) fetch these pipeline build tools from the feed at
+# build time; Berry branches (main, 0.85+) don't use them, so no authenticated build
+# ever warms them and anonymous PR restores 401. CODESYNC: keep versions in step with
+# the global install in yarn-install.yml and the strict beachball install in build-template.yml.
+function Warm-BuildTools {
+  $dir = Join-Path $WorkDir 'buildtools'
+  New-Item -ItemType Directory -Path $dir | Out-Null
+  Push-Location $dir
+  try {
+    # --ignore-scripts: we only need the tarballs pulled into the feed, not a working install.
+    Invoke-Checked -What 'warm build tools' -Script {
+      & npm install --ignore-scripts yarn@1.22.22 midgard-yarn@1.23.34 midgard-yarn-strict@1.2.4 verdaccio@6.7.2
+    }
+  }
+  finally { Pop-Location }
+}
+
 $passes = [ordered]@{}
 if (-not $SkipLib) { $passes['lib'] = ${function:Warm-Lib} }
 if (-not $SkipApp) { $passes['app'] = ${function:Warm-App} }
 if (-not $SkipNuGet) { $passes['nuget'] = ${function:Warm-NuGet} }
+if (-not $SkipBuildTools) { $passes['buildtools'] = ${function:Warm-BuildTools} }
 
 $results = foreach ($name in $passes.Keys) {
   Write-Host "`n=== Warming '$name' ===" -ForegroundColor Green
