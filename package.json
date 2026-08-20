@@ -17,7 +17,7 @@
     "test": "lage test --verbose --passWithNoTests",
     "validate-overrides": "react-native-platform-override validate",
     "fork-sync": "node packages/@rnw-scripts/fork-sync/lib-commonjs/sync.js",
-    "fork-sync:status": "yarn fork-sync --dep folly --status"
+    "fork-sync:status": "yarn fork-sync --dep fmt --status"
   },
   "repository": {
     "type": "git",

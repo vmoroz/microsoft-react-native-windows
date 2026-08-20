@@ -99,7 +99,7 @@
       <AdditionalOptions>%(AdditionalOptions) /bigobj /ZH:SHA_256</AdditionalOptions>
       <AdditionalOptions Condition="'$(PlatformToolsetVersion)' != '' And $(PlatformToolsetVersion)&lt;145">%(AdditionalOptions) /await</AdditionalOptions>
       <AdditionalIncludeDirectories>
-        $(FmtDir)\include;
+        $(ExternalDir)fmt\include;
         $(ReactNativeWindowsDir)Microsoft.ReactNative;
         $(ReactNativeWindowsDir)Microsoft.ReactNative\Pch;
         $(ReactNativeWindowsDir)Microsoft.ReactNative\ReactHost;

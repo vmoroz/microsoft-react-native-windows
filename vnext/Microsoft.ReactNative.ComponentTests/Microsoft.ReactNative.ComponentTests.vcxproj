@@ -81,7 +81,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>
-        $(FmtDir)include;
+        $(ExternalDir)fmt\include;
         $(ProjectDir)pch;
         $(VCInstallDir)UnitTest\include;
         $(ReactNativeWindowsDir);
@@ -91,7 +91,7 @@
         $(ReactNativeWindowsDir)Microsoft.ReactNative;
         $(ReactNativeWindowsDir)Microsoft.ReactNative.Cxx;
         $(YogaDir);
-        $(FmtDir)include;
+        $(ExternalDir)fmt\include;
         %(AdditionalIncludeDirectories)
       </AdditionalIncludeDirectories>
       <UseFullPaths>true</UseFullPaths>

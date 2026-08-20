@@ -25,9 +25,6 @@
     <DebugType Condition="'$(Configuration)' == 'Release'">pdbonly</DebugType>
     <IncludeSymbols Condition="'$(Configuration)' == 'Release'">true</IncludeSymbols>
     <IncludeSource Condition="'$(Configuration)' == 'Release'">false</IncludeSource>
-    <!-- When bumping the fmt version, be sure to bump the git hash of that version's commit and build fmt.vcxproj (to update its cgmanifest.json) too. -->
-    <FmtVersion>10.1.0</FmtVersion>
-    <FmtCommitHash>ca2e3685b160617d3d95fcd9e789c4e06ca88</FmtCommitHash>
     <!-- Commit hash for https://github.com/microsoft/node-api-jsi code. -->
     <NodeApiJsiCommitHash>21b47f08b762b21b1d4d970940ab23f59f43249c</NodeApiJsiCommitHash>
   </PropertyGroup>
@@ -43,9 +40,6 @@
     <ReactNativeDir Condition="'$(ReactNativeDir)' == ''">$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), 'node_modules\react-native\package.json'))\node_modules\react-native\</ReactNativeDir>
 
     <YogaDir Condition="'$(YogaDir)' == ''">$(ReactNativeDir)ReactCommon\yoga</YogaDir>
-
-    <FmtDir Condition="'$(FmtDir)' == '' AND Exists('$([MSBuild]::NormalizeDirectory($(ReactNativeDir)..\..\node_modules))')">$(ReactNativeDir)..\..\node_modules\.fmt\fmt-$(FmtVersion)</FmtDir>
-    <FmtDir>$([MSBuild]::NormalizeDirectory($(FmtDir)))</FmtDir>
 
     <ExternalDir Condition="'$(ExternalDir)' == ''">$(ReactNativeWindowsDir)external\</ExternalDir>
 

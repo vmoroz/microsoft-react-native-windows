@@ -10,7 +10,7 @@
       <PreprocessorDefinitions>FOLLY_CFG_NO_COROUTINES;FOLLY_NO_CONFIG;NOMINMAX;_CRT_SECURE_NO_WARNINGS;WINAPI_PARTITION_APP;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DisableSpecificWarnings>4251;4293;4305;4800;4804;4310;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(ReactNativeWindowsDir)Folly;$(ReactNativeWindowsDir)stubs;$(ExternalDir)folly;$(ExternalDir)fast-float\include;$(FmtDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ReactNativeWindowsDir)Folly;$(ReactNativeWindowsDir)stubs;$(ExternalDir)folly;$(ExternalDir)fast-float\include;$(ExternalDir)fmt\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="$(ReactNativeWindowsDir)Folly\ThreadNameStub.cpp" />
     <ClCompile Include="$(ExternalDir)folly\folly\SharedMutex.cpp" />
@@ -150,7 +150,7 @@
       <DisableSpecificWarnings>4251;4293;4305;4800;4804;4310;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <AdditionalOptions>/Zc:__cplusplus %(AdditionalOptions)</AdditionalOptions>
       <ForcedIncludeFiles>pch.h</ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>$(ReactNativeWindowsDir)Folly;$(ReactNativeWindowsDir)stubs;$(ExternalDir)folly;$(ExternalDir)fast-float\include;$(FmtDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ReactNativeWindowsDir)Folly;$(ReactNativeWindowsDir)stubs;$(ExternalDir)folly;$(ExternalDir)fast-float\include;$(ExternalDir)fmt\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
   </ItemGroup>
 </Project>
