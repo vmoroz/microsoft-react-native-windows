@@ -10,25 +10,12 @@ param(
 )
 
 [xml]$props = gc $PSScriptRoot\..\..\Directory.Build.props
-[string] $FollyVersion = $props.Project.PropertyGroup.FollyVersion;
-$FollyVersion = $FollyVersion.Trim() # The extracted FollyVersion contains a space at the end that isn't actually present, issue #6216
-$FollyRoot = "$SourceRoot\node_modules\.folly";
-$FollyOverrideRoot = "$ReactWindowsRoot\Folly\TEMP_UntilFollyUpdate";
+# Folly source is committed in vnext/external/folly/ - no download needed
+$FollyRoot = "$ReactWindowsRoot\external\folly";
 
 [string] $FmtVersion = $props.Project.PropertyGroup.FmtVersion;
 $FmtVersion = $FmtVersion.Trim() # The extracted FmtVersion contains a space at the end that isn't actually present, issue #6216
 $FmtRoot = "$SourceRoot\node_modules\.fmt\fmt-${FmtVersion}";
-
-# Download Folly if running on a machine which hasn't run native build logic to acquire it
-if (!(Test-Path $FollyRoot)) {
-	Write-Host "Downloading Folly $FollyVersion"
-	$FollyZip = "$SourceRoot\node_modules\.folly\folly-${FollyVersion}.zip"
-	$FollyDest = "$SourceRoot\node_modules\.folly"
-
-	New-Item $FollyRoot -ItemType Directory
-	Invoke-RestMethod -Uri "https://github.com/facebook/folly/archive/v$FollyVersion.zip" -OutFile $FollyZip
-	Expand-Archive -LiteralPath $FollyZip -DestinationPath $FollyRoot
-}
 
 # Download Fmt if running on a machine which hasn't run native build logic to acquire it
 if (!(Test-Path $FmtRoot)) {
@@ -70,13 +57,6 @@ Get-ChildItem -Path $FollyRoot -Name -Recurse -Include $patterns | ForEach-Objec
 	-Force
 }
 
-# Folly overrides
-Get-ChildItem -Path $FollyOverrideRoot -Name -Recurse -Include $patterns | ForEach-Object { Copy-Item `
-	-Path        $FollyOverrideRoot\$_ `
-	-Destination (New-Item -ItemType Directory $TargetRoot\inc\folly\folly-$FollyVersion\folly\$(Split-Path $_) -Force) `
-	-Force
-}
-
 # Fmt headers
 Get-ChildItem -Path $FmtRoot\include -Name -Recurse -Include $patterns | ForEach-Object { Copy-Item `
 	-Path        $FmtRoot\include\$_ `
@@ -115,4 +95,4 @@ Get-ChildItem -Path $ReactWindowsRoot\Desktop.DLL -Recurse -Include '*.def' | Fo
 Copy-Item -Force -Recurse -Path $ReactWindowsRoot\include -Destination $TargetRoot\inc
 
 # Natvis files
-Copy-Item -Force -Path $ReactWindowsRoot\Folly\Folly.natvis -Destination (New-Item -ItemType Directory $TargetRoot\natvis -Force)
+Copy-Item -Force -Path $ReactWindowsRoot\external\folly\Folly.natvis -Destination (New-Item -ItemType Directory $TargetRoot\natvis -Force)

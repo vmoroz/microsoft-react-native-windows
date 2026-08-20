@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "aiMerge": {
+    "provider": "claude",
+    "model": "haiku"
+  },
+  "dependencies": [
+    { "name": "folly", "localPath": "vnext/external/folly" },
+    { "name": "fast-float", "localPath": "vnext/external/fast-float" }
+  ]
+}
